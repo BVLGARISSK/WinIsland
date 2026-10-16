@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::platform::{MonitorRef, WindowRef, window};
 use winisland_core::config::{
@@ -8,6 +8,8 @@ use winisland_platform::{OverlayStyles, WindowPosition, WindowSize};
 use winisland_render::text::FontManager;
 
 use super::{App, DEFAULT_ANIMATION_REFRESH_RATE_MILLIHERTZ, IslandLayout};
+
+pub(super) const DISPLAY_SETTLE: Duration = Duration::from_millis(2500);
 
 impl App {
     pub(super) fn required_window_size(&self) -> WindowSize {
@@ -517,5 +519,24 @@ impl App {
         } else {
             target_base_w * self.config.compact_scale
         }
+    }
+}
+
+impl App {
+    pub(super) fn update_display_transition(&mut self, window: &WindowRef, now: Instant) -> bool {
+        if let Some(monitor) = Self::get_target_monitor(window, self.config.monitor_index) {
+            let size = monitor.size();
+            let position = monitor.position();
+            if size.width > 0
+                && size.height > 0
+                && ((size.width, size.height) != self.geom.monitor_size
+                    || (position.x, position.y) != self.geom.monitor_pos)
+            {
+                self.display_settle_until = Some(now + DISPLAY_SETTLE);
+            }
+        }
+        self.display_transition = self.display_settle_until.is_some_and(|until| now < until)
+            || crate::platform::display().exclusive_fullscreen_active();
+        self.display_transition
     }
 }

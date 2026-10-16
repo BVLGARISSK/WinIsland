@@ -129,7 +129,9 @@ fn write_job(directory: &Path, job: Job) -> io::Result<()> {
     let Job { first, last, frame } = job;
     let rgb: Vec<u8> = frame
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
         .collect();
     let path = frame_path(directory, first);

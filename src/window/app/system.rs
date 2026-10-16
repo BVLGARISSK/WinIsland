@@ -742,8 +742,11 @@ impl App {
                 self.geom.monitor_size = cur_mon_size;
                 self.geom.monitor_pos = cur_mon_pos;
                 let (position_x, position_y) = self.compute_window_position(mon_pos, mon_size);
-                self.set_configured_window_position(window_ref, position_x, position_y);
-                self.geom.position_restore_after = Some(now + Duration::from_millis(750));
+                self.geom.configured_x = position_x;
+                self.geom.configured_y = position_y;
+                self.display_settle_until = Some(now + super::layout::DISPLAY_SETTLE);
+                self.display_transition = true;
+                self.geom.position_restore_after = Some(now + super::layout::DISPLAY_SETTLE);
             }
         }
     }
