@@ -2,6 +2,8 @@ use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
+mod magnifier;
+
 use parking_lot::Mutex;
 use windows::{
     Foundation::Metadata::ApiInformation,
@@ -15,7 +17,7 @@ use windows::{
     Graphics::SizeInt32,
     Security::Authorization::AppCapabilityAccess::AppCapabilityAccessStatus,
     Win32::{
-        Foundation::{HANDLE, HMODULE, HWND, LUID},
+        Foundation::{HANDLE, HMODULE, HWND, LUID, RECT},
         Graphics::{
             Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1},
             Direct3D11::{
@@ -38,7 +40,9 @@ use windows::{
             Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess},
             Graphics::Capture::IGraphicsCaptureItemInterop,
         },
-        UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE},
+        UI::WindowsAndMessaging::{
+            GetWindowRect, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
+        },
     },
     core::{HSTRING, Interface},
 };
@@ -80,12 +84,14 @@ struct Probe {
 
 struct Session {
     monitor: HMONITOR,
-    origin: (i32, i32),
+    origin: Cell<(i32, i32)>,
+    source: Cell<(i32, i32, i32, i32)>,
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     token: i64,
     rate_hz: Cell<u32>,
     borderless: Cell<bool>,
+    magnifier: Option<magnifier::Magnifier>,
 }
 
 struct Import {
@@ -98,6 +104,7 @@ struct Import {
 
 pub(crate) struct BackdropCapture {
     hwnd: HWND,
+    magnifier_mode: Cell<bool>,
     device: ID3D11Device5,
     context: ID3D11DeviceContext4,
     shared: Arc<Shared>,
@@ -110,7 +117,11 @@ pub(crate) struct BackdropCapture {
 }
 
 impl BackdropCapture {
-    pub(crate) fn new(hwnd: HWND, adapter_luid: u64) -> Result<Self, String> {
+    pub(crate) fn new(
+        hwnd: HWND,
+        adapter_luid: u64,
+        visible_to_capture: bool,
+    ) -> Result<Self, String> {
         if !GraphicsCaptureSession::IsSupported().unwrap_or(false) {
             return Err("Windows.Graphics.Capture is unsupported".to_string());
         }
@@ -122,12 +133,14 @@ impl BackdropCapture {
         let winrt_device: IDirect3DDevice = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi) }
             .and_then(|device| device.cast())
             .map_err(|error| format!("WinRT Direct3D device creation failed: {error}"))?;
-        // SAFETY: hwnd is the caller's live overlay window on this thread.
-        unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }
-            .map_err(|error| format!("Capture exclusion failed: {error}"))?;
+        let magnifier_mode = visible_to_capture;
+        if !magnifier_mode {
+            exclude_from_capture(hwnd)?;
+        }
         let d3d = AgileContext(device.clone().into(), context.clone().into());
         let capture = Self {
             hwnd,
+            magnifier_mode: Cell::new(magnifier_mode),
             device,
             context,
             shared: Arc::new(Shared {
@@ -159,7 +172,7 @@ impl BackdropCapture {
             log::warn!("Backdrop capture restart failed: {error}");
             return None;
         }
-        let origin = self.session.borrow().as_ref()?.origin;
+        let origin = self.session.borrow().as_ref()?.origin.get();
         let interest = Rect {
             left: request.interest.left - origin.0,
             top: request.interest.top - origin.1,
@@ -249,7 +262,7 @@ impl BackdropCapture {
             return None;
         }
         self.write_value.store(value, Ordering::Release);
-        self.serial.set(self.serial.get() + 1);
+        self.serial.set(value);
         self.copied.set(Some(key));
         Some(())
     }
@@ -286,6 +299,12 @@ impl BackdropCapture {
         })();
         match import {
             Ok(import) => {
+                // SAFETY: The fence was opened above and stays live inside the import.
+                let completed = unsafe { import.write_fence.GetCompletedValue() };
+                if completed > self.write_value.load(Ordering::Acquire) {
+                    self.write_value.store(completed, Ordering::Release);
+                }
+                self.serial.set(self.serial.get().max(completed));
                 *self.import.borrow_mut() = Some(import);
                 self.copied.set(None);
                 Some(())
@@ -298,6 +317,17 @@ impl BackdropCapture {
     }
 
     fn ensure_session(&self, rate_hz: u32) -> Result<(), String> {
+        if self.magnifier_mode.get() {
+            match self.ensure_magnifier_session(rate_hz) {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    log::warn!("Magnifier backdrop is unavailable, using monitor capture: {error}");
+                    self.magnifier_mode.set(false);
+                    self.session.borrow_mut().take();
+                    exclude_from_capture(self.hwnd)?;
+                }
+            }
+        }
         // SAFETY: hwnd is the live overlay window; the call only reads its placement.
         let monitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
         if let Some(session) = self.session.borrow().as_ref()
@@ -324,6 +354,55 @@ impl BackdropCapture {
         *self.session.borrow_mut() = Some(session);
         Ok(())
     }
+
+    fn ensure_magnifier_session(&self, rate_hz: u32) -> Result<(), String> {
+        let rect = window_rect(self.hwnd)?;
+        let source = (rect.left, rect.top, rect.right, rect.bottom);
+        if let Some(session) = self.session.borrow().as_ref()
+            && let Some(magnifier) = &session.magnifier
+        {
+            if session.rate_hz.get() != rate_hz {
+                session.rate_hz.set(rate_hz);
+                set_rate(&session.session, rate_hz);
+                magnifier.set_rate(rate_hz);
+            }
+            if session.source.get() != source {
+                session.source.set(source);
+                session.origin.set((rect.left, rect.top));
+                magnifier.set_source(rect);
+            }
+            if !session.borderless.get() && borderless_allowed() {
+                session.borderless.set(true);
+                hide_border(&session.session);
+            }
+            if border_access_required() {
+                return Err("Borderless screen capture access is unavailable".to_string());
+            }
+            return Ok(());
+        }
+        self.session.borrow_mut().take();
+        *self.shared.latest.lock() = Latest::default();
+        self.copied.set(None);
+        let magnifier = magnifier::Magnifier::start(rect, rate_hz)?;
+        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
+            .map_err(|error| format!("Capture interop is unavailable: {error}"))?;
+        // SAFETY: The magnifier host is a live window owned by this process.
+        let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(magnifier.host()) }
+            .map_err(|error| format!("Magnifier capture item failed: {error}"))?;
+        // SAFETY: hwnd is the live overlay window; the call only reads its placement.
+        let monitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
+        let session = Session::open(
+            item,
+            &self.shared,
+            rate_hz,
+            monitor,
+            (rect.left, rect.top),
+            Some(magnifier),
+        )?;
+        session.source.set(source);
+        *self.session.borrow_mut() = Some(session);
+        Ok(())
+    }
 }
 
 impl Session {
@@ -341,6 +420,24 @@ impl Session {
         // SAFETY: monitor is a live display handle; WinRT returns an owned capture item.
         let item: GraphicsCaptureItem = unsafe { interop.CreateForMonitor(monitor) }
             .map_err(|error| format!("Monitor capture item failed: {error}"))?;
+        Self::open(
+            item,
+            shared,
+            rate_hz,
+            monitor,
+            (info.rcMonitor.left, info.rcMonitor.top),
+            None,
+        )
+    }
+
+    fn open(
+        item: GraphicsCaptureItem,
+        shared: &Arc<Shared>,
+        rate_hz: u32,
+        monitor: HMONITOR,
+        origin: (i32, i32),
+        magnifier: Option<magnifier::Magnifier>,
+    ) -> Result<Self, String> {
         let size = item
             .Size()
             .map_err(|error| format!("Capture size is unavailable: {error}"))?;
@@ -381,12 +478,14 @@ impl Session {
             .map_err(|error| format!("Capture start failed: {error}"))?;
         Ok(Self {
             monitor,
-            origin: (info.rcMonitor.left, info.rcMonitor.top),
+            origin: Cell::new(origin),
+            source: Cell::new((0, 0, 0, 0)),
             pool,
             session,
             token,
             rate_hz: Cell::new(rate_hz),
             borderless: Cell::new(borderless),
+            magnifier,
         })
     }
 }
@@ -732,4 +831,21 @@ fn hide_border(session: &GraphicsCaptureSession) {
     if let Err(error) = session.SetIsBorderRequired(false) {
         log::warn!("Screen capture border could not be hidden: {error}");
     }
+}
+
+fn exclude_from_capture(hwnd: HWND) -> Result<(), String> {
+    // SAFETY: hwnd is the caller's live overlay window on this thread.
+    unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }
+        .map_err(|error| format!("Capture exclusion failed: {error}"))
+}
+
+fn window_rect(hwnd: HWND) -> Result<RECT, String> {
+    let mut rect = RECT::default();
+    // SAFETY: hwnd is the live overlay window and rect is a valid output.
+    unsafe { GetWindowRect(hwnd, &mut rect) }
+        .map_err(|error| format!("Overlay bounds are unavailable: {error}"))?;
+    if rect.right <= rect.left || rect.bottom <= rect.top {
+        return Err("Overlay bounds are empty".to_string());
+    }
+    Ok(rect)
 }

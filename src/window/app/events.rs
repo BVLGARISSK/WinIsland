@@ -455,6 +455,7 @@ impl App {
                                 active: self.recorder.is_some()
                                     || self.config.island_style == "liquid",
                                 animating: self.recorder.is_some() || self.springs.any_animating(),
+                                visible_to_capture: self.config.liquid_glass_compat_capture,
                             },
                         );
                         let main_target = renderer.main_target();

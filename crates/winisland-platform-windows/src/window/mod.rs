@@ -693,11 +693,16 @@ impl WindowSystem for WindowsWindowSystem {
         true
     }
 
-    fn start_backdrop_capture(&self, id: WindowId, adapter_luid: u64) -> Result<(), PlatformError> {
+    fn start_backdrop_capture(
+        &self,
+        id: WindowId,
+        adapter_luid: u64,
+        visible_to_capture: bool,
+    ) -> Result<(), PlatformError> {
         let window = get_window(id).ok_or(PlatformError::Unavailable("overlay window"))?;
         let hwnd = window_hwnd(&window).ok_or(PlatformError::Unavailable("overlay handle"))?;
         let capture = Rc::new(
-            BackdropCapture::new(HWND(hwnd as *mut _), adapter_luid)
+            BackdropCapture::new(HWND(hwnd as *mut _), adapter_luid, visible_to_capture)
                 .map_err(PlatformError::Backend)?,
         );
         WINDOWS.with(|windows| {
