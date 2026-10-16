@@ -45,7 +45,12 @@ impl SettingsApp {
             page.setting(&self.config, AppConfigField::LiquidGlassTint, true);
             page.setting(&self.config, AppConfigField::LiquidGlassSiri, true);
             page.row_label(tr("liquid_glass_siri_note"));
-            page.row_label(tr("style_liquid_note"));
+            page.setting(&self.config, AppConfigField::LiquidGlassCompatCapture, true);
+            page.row_label(tr(if self.config.liquid_glass_compat_capture {
+                "liquid_glass_compat_capture_note"
+            } else {
+                "style_liquid_note"
+            }));
         }
         if !host_backdrop {
             page.row_label(tr("platform_unavailable"));

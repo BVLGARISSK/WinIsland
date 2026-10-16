@@ -757,6 +757,7 @@ pub(super) struct BackdropCaptureInput {
     pub(super) frost_sigma: f32,
     pub(super) active: bool,
     pub(super) animating: bool,
+    pub(super) visible_to_capture: bool,
 }
 
 pub(super) fn update_backdrop_capture(
@@ -774,13 +775,26 @@ pub(super) fn update_backdrop_capture(
         renderer.release_backdrop();
         return false;
     }
+    if let BackdropCaptureState::Running { visible } = *state
+        && visible != input.visible_to_capture
+    {
+        stop_backdrop_capture(state, input.window);
+    }
     match *state {
-        BackdropCaptureState::Running => {}
+        BackdropCaptureState::Running { .. } => {}
         BackdropCaptureState::Failed(at) if at.elapsed() < BACKDROP_CAPTURE_RETRY => {
             return false;
         }
-        _ => match window().start_backdrop_capture(window_ref.id(), renderer.adapter_luid()) {
-            Ok(()) => *state = BackdropCaptureState::Running,
+        _ => match window().start_backdrop_capture(
+            window_ref.id(),
+            renderer.adapter_luid(),
+            input.visible_to_capture,
+        ) {
+            Ok(()) => {
+                *state = BackdropCaptureState::Running {
+                    visible: input.visible_to_capture,
+                }
+            }
             Err(error) => {
                 log::warn!("Liquid glass backdrop capture is unavailable: {error}");
                 *state = BackdropCaptureState::Failed(Instant::now());
@@ -831,7 +845,7 @@ pub(super) fn update_backdrop_capture(
 }
 
 fn stop_backdrop_capture(state: &mut BackdropCaptureState, window_ref: Option<WindowRef>) {
-    if *state != BackdropCaptureState::Running {
+    if !matches!(state, BackdropCaptureState::Running { .. }) {
         return;
     }
     if let Some(window_ref) = window_ref {

@@ -65,6 +65,8 @@ pub struct AppConfig {
     pub liquid_glass_tint: f32,
     #[setting(toggle)]
     pub liquid_glass_siri: bool,
+    #[setting(toggle)]
+    pub liquid_glass_compat_capture: bool,
     #[setting(number(min = 0.0, max = 50.0, step = 1.0))]
     pub glass_blur: f32,
     #[educe(Default = true)]
