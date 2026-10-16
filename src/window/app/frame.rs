@@ -58,10 +58,11 @@ impl App {
         if now < self.next_frame_deadline {
             return;
         }
-        if self
-            .geom
-            .position_restore_after
-            .is_some_and(|restore_after| now >= restore_after)
+        if !self.display_transition
+            && self
+                .geom
+                .position_restore_after
+                .is_some_and(|restore_after| now >= restore_after)
         {
             self.geom.position_restore_after = None;
             self.set_configured_window_position(
@@ -70,7 +71,7 @@ impl App {
                 self.geom.configured_y,
             );
         }
-        if self.topmost_check.due(now) {
+        if self.topmost_check.due(now) && !self.update_display_transition(&window, now) {
             Self::enforce_overlay_window(&window);
         }
         self.handle_tray_events(&window);

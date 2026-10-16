@@ -75,6 +75,7 @@ impl App {
                         && !self.is_right_dragging
                         && self.hide.origin.is_none()
                         && self.geom.position_restore_after.is_none()
+                        && !self.update_display_transition(&win, Instant::now())
                         && (position.x != self.geom.configured_x
                             || position.y != self.geom.configured_y)
                     {

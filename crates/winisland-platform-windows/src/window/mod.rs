@@ -38,6 +38,7 @@ struct WindowRecord {
     window_backdrop: Option<Rc<WindowBackdrop>>,
     input: Option<Rc<hit_test::InputWindow>>,
     backdrop_capture: Option<Rc<BackdropCapture>>,
+    skip_taskbar: Option<bool>,
     window: Arc<Window>,
     backdrop: Option<Arc<Window>>,
 }
@@ -97,6 +98,7 @@ fn register_window(
         window_backdrop: None,
         input,
         backdrop_capture: None,
+        skip_taskbar: None,
         window,
         backdrop,
     };
@@ -527,6 +529,11 @@ impl WindowSystem for WindowsWindowSystem {
     }
 
     fn apply_overlay_styles(&self, id: WindowId, styles: OverlayStyles) {
+        let skip_taskbar_changed = WINDOWS.with(|windows| {
+            windows.borrow_mut().get_mut(&id).is_some_and(|record| {
+                record.skip_taskbar.replace(styles.skip_taskbar) != Some(styles.skip_taskbar)
+            })
+        });
         let keyboard = WINDOWS.with(|windows| {
             windows
                 .borrow()
@@ -549,7 +556,9 @@ impl WindowSystem for WindowsWindowSystem {
                     styles::set_keyboard_input(HWND(hwnd as *mut _), true);
                 }
             }
-            window.set_skip_taskbar(styles.skip_taskbar);
+            if skip_taskbar_changed {
+                window.set_skip_taskbar(styles.skip_taskbar);
+            }
         }
     }
 

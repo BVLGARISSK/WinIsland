@@ -7,8 +7,9 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow,
+    MonitorFromRect, MonitorFromWindow,
 };
+use windows::Win32::UI::Shell::{QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState};
 use windows::Win32::UI::WindowsAndMessaging::{
     CURSORINFO, FindWindowW, GetClassNameW, GetCursorInfo, GetCursorPos, GetForegroundWindow,
     GetWindowRect, GetWindowThreadProcessId, IsIconic, SW_RESTORE, SetForegroundWindow, ShowWindow,
@@ -61,6 +62,12 @@ impl DisplayProvider for WindowsDisplay {
 
     fn foreign_fullscreen_on(&self, target: Rect) -> bool {
         foreground_fullscreen(target)
+    }
+
+    fn exclusive_fullscreen_active(&self) -> bool {
+        // SAFETY: The query has no inputs and returns the state by value.
+        unsafe { SHQueryUserNotificationState() }
+            .is_ok_and(|state| state == QUNS_RUNNING_D3D_FULL_SCREEN)
     }
 
     fn cursor_hidden(&self) -> bool {
@@ -170,14 +177,17 @@ fn foreground_fullscreen(target: Rect) -> bool {
             && window_rect.top <= bounds.top
             && window_rect.right >= bounds.right
             && window_rect.bottom >= bounds.bottom;
-        let target_width = target.right.saturating_sub(target.left);
-        let target_height = target.bottom.saturating_sub(target.top);
-        let same_monitor = target_width == 0
-            || target_height == 0
-            || (bounds.left == target.left
-                && bounds.top == target.top
-                && bounds.right == target.right
-                && bounds.bottom == target.bottom);
+        let same_monitor = target.right <= target.left
+            || target.bottom <= target.top
+            || MonitorFromRect(
+                &RECT {
+                    left: target.left,
+                    top: target.top,
+                    right: target.right,
+                    bottom: target.bottom,
+                },
+                MONITOR_DEFAULTTONEAREST,
+            ) == monitor;
         fullscreen && same_monitor
     }
 }

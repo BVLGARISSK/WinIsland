@@ -17,6 +17,8 @@ pub trait DisplayProvider {
     fn cursor_position(&self) -> Result<Option<Point>, PlatformError>;
     /// Checks whether a foreign window covers the target; false on lookup failure.
     fn foreign_fullscreen_on(&self, target: Rect) -> bool;
+    /// Reports whether an app holds Direct3D exclusive fullscreen; false on lookup failure.
+    fn exclusive_fullscreen_active(&self) -> bool;
     /// Reports whether the system cursor is hidden; false on lookup failure.
     fn cursor_hidden(&self) -> bool;
     /// Starts WMI brightness tracking on a worker, or returns an unavailable error.
