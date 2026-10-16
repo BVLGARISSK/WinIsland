@@ -221,6 +221,8 @@ pub struct SettingsApp {
     logical_win_w: f64,
     logical_win_h: f64,
     pending_dpi_size: Option<WindowSize>,
+    pending_dpi_retried: bool,
+    dpi_size_check: bool,
     target_monitor: Option<MonitorRef>,
     pub(crate) focused: bool,
     pub(crate) dots_hovered: bool,
@@ -357,6 +359,8 @@ impl SettingsApp {
             logical_win_w: WIN_W as f64,
             logical_win_h: WIN_H as f64,
             pending_dpi_size: None,
+            pending_dpi_retried: false,
+            dpi_size_check: false,
             target_monitor: None,
             focused: true,
             dots_hovered: false,
@@ -689,11 +693,12 @@ impl SettingsApp {
             return;
         }
         if let Some(expected) = self.pending_dpi_size.take() {
-            if expected.width.abs_diff(size.width) > 2 || expected.height.abs_diff(size.height) > 2
+            if (expected.width.abs_diff(size.width) > 2
+                || expected.height.abs_diff(size.height) > 2)
+                && !std::mem::replace(&mut self.pending_dpi_retried, true)
             {
                 self.pending_dpi_size = Some(expected);
                 let _ = window.request_inner_size(expected);
-                return;
             }
         } else if size.width > 0 && size.height > 0 {
             let scale = window.scale_factor();
@@ -718,6 +723,8 @@ impl SettingsApp {
             .is_some_and(|window_ref| window_ref.request_inner_size(size))
         {
             self.pending_dpi_size = Some(size);
+            self.pending_dpi_retried = false;
+            self.dpi_size_check = true;
         }
     }
 

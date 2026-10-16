@@ -98,7 +98,7 @@ impl SettingsApp {
     }
 
     pub(crate) fn draw(&mut self, renderer: &mut Renderer) {
-        let Some(win) = self.window.as_ref() else {
+        let Some(win) = self.window else {
             return;
         };
         if win.is_minimized() == Some(true) {
@@ -115,6 +115,24 @@ impl SettingsApp {
         };
         if p_w <= 0 || p_h <= 0 {
             return;
+        }
+        if (p_w as f32 - self.win_w).abs() > 0.5 || (p_h as f32 - self.win_h).abs() > 0.5 {
+            self.win_w = p_w as f32;
+            self.win_h = p_h as f32;
+            self.mark_items_dirty();
+            self.resize_renderer_target(
+                renderer,
+                winisland_platform::WindowSize::new(p_w as u32, p_h as u32),
+            );
+        }
+        if std::mem::take(&mut self.dpi_size_check) {
+            let expected = winisland_platform::WindowSize::new(
+                (self.logical_win_w * f64::from(scale)).round() as u32,
+                (self.logical_win_h * f64::from(scale)).round() as u32,
+            );
+            if expected.width.abs_diff(p_w as u32) > 2 || expected.height.abs_diff(p_h as u32) > 2 {
+                let _ = win.request_inner_size(expected);
+            }
         }
 
         self.ensure_items_cache();
@@ -143,8 +161,8 @@ impl SettingsApp {
         if self.window_backdrop {
             self.window_backdrop = crate::platform::window().update_window_backdrop(
                 window_id,
-                (SIDEBAR_W + WINDOW_RADIUS) * scale,
-                p_h as f32,
+                ((SIDEBAR_W + WINDOW_RADIUS) * scale).min(p_w as f32),
+                (win_h * scale).min(p_h as f32),
                 WINDOW_RADIUS * scale,
             );
         }
