@@ -136,6 +136,22 @@ impl App {
 
     pub(super) fn handle_press(&mut self, rel_x: i32, rel_y: i32, layout: &IslandLayout) {
         crate::ui::expanded::timer_view::clear_selection();
+        if !self.expanded
+            && self.timer_orb_rect().is_some_and(|orb| {
+                orb.contains(winisland_render::Point::new(rel_x as f32, rel_y as f32))
+            })
+        {
+            self.expand();
+            if self.expanded_pages().contains(&ExpandedPage::Timer) {
+                self.current_page = ExpandedPage::Timer;
+                self.snap_to_current_page();
+            }
+            self.idle_timer = Instant::now();
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
         let island_y = layout.island_y;
         let offset_x = layout.offset_x;
         let current_island_x = layout.current_island_x;

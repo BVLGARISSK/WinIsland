@@ -2,10 +2,11 @@ use std::time::{Duration, Instant};
 
 use crate::anim::{Curve, Tween};
 
-const SEPARATE_DURATION: Duration = Duration::from_millis(750);
-const MERGE_DURATION: Duration = Duration::from_millis(500);
-const EXPAND_MERGE_DURATION: Duration = Duration::from_millis(320);
-const CONTENT_DURATION: Duration = Duration::from_millis(140);
+const SEPARATE_DURATION: Duration = Duration::from_millis(540);
+const RESEPARATE_DURATION: Duration = Duration::from_millis(320);
+const MERGE_DURATION: Duration = Duration::from_millis(360);
+const EXPAND_MERGE_DURATION: Duration = Duration::from_millis(230);
+const CONTENT_DURATION: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct TaskId(pub u64);
@@ -35,6 +36,7 @@ pub struct Multitask<T> {
     current: Option<Task<T>>,
     separation: Tween,
     content: Tween,
+    detached: Option<TaskId>,
 }
 
 impl<T: Copy + PartialEq> Default for Multitask<T> {
@@ -50,6 +52,7 @@ impl<T: Copy + PartialEq> Multitask<T> {
             current: None,
             separation: Tween::new(0.0),
             content: Tween::new(0.0),
+            detached: None,
         }
     }
 
@@ -76,7 +79,11 @@ impl<T: Copy + PartialEq> Multitask<T> {
             && (compact_settled || self.separation.value() > 0.0)
             && !replacing
             && self.current.is_some();
-        let duration = if detach {
+        let returning =
+            self.detached.is_some() && self.detached == self.current.map(|task| task.id);
+        let duration = if detach && returning {
+            RESEPARATE_DURATION
+        } else if detach {
             SEPARATE_DURATION
         } else if presentation == Presentation::Expanded {
             EXPAND_MERGE_DURATION
@@ -99,6 +106,11 @@ impl<T: Copy + PartialEq> Multitask<T> {
                 self.separation
                     .retarget(1.0, SEPARATE_DURATION, Curve::EaseInRebound, now);
             }
+        }
+        if self.current.is_none() {
+            self.detached = None;
+        } else if self.separation.value() >= 0.99 {
+            self.detached = self.current.map(|task| task.id);
         }
         let show_content = self.current.is_some() && self.separation.value() >= 0.55 && detach;
         self.content.retarget(

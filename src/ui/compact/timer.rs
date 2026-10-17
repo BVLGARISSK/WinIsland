@@ -163,6 +163,18 @@ pub(crate) fn countdown_width(timer: TimerContent, base_width: f32) -> f32 {
     base_width.max(EDGE_INSET * 2.0 + ICON_SIZE + 16.0 + width)
 }
 
+pub(crate) fn draw_timer_icon(
+    painter: Painter<'_>,
+    center: Point,
+    scale: f32,
+    progress: f32,
+    paused: bool,
+    alpha: f32,
+) {
+    let color = YELLOW.with_alpha_f(alpha * if paused { 0.65 } else { 1.0 });
+    draw_progress(painter, center, scale, progress, color);
+}
+
 pub(crate) fn draw_countdown(
     painter: Painter<'_>,
     timer: TimerContent,

@@ -284,6 +284,11 @@ impl App {
                 .map(rect_region),
             );
         }
+        if !self.expanded
+            && let Some(orb) = self.timer_orb_rect()
+        {
+            regions.push(rect_region(orb));
+        }
         if self.is_hidden()
             && self.config.hidden_width <= MIN_HIDDEN_WIDTH
             && self.springs.hide.value >= 0.999
@@ -1115,7 +1120,7 @@ impl App {
         self.springs
             .r
             .settle(target_r, SETTLE_PIXELS, SETTLE_PIXEL_VELOCITY);
-        self.springs.multitask_x.update_dt(0.0, 0.075, 0.78, dt);
+        self.springs.multitask_x.update_dt(0.0, 0.15, 0.71, dt);
         self.springs.multitask_x.settle(
             0.0,
             0.02 * self.config.compact_scale,
@@ -1179,7 +1184,7 @@ impl App {
             || self.compact_overlay.is_timer_finished_animating()
             || (compact_timer.is_some() && crate::ui::compact::timer::countdown_is_animating())
             || self.multitask.is_animating()
-            || self.device_indicators.is_animating()
+            || self.status_indicators.is_animating()
             || self
                 .attention_pulse_started
                 .is_some_and(|started| now.duration_since(started) < Duration::from_millis(1600))

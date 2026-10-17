@@ -38,10 +38,24 @@ impl App {
         let display = |timer: TimerContent| (timer.remaining_secs(), timer.total, timer.paused);
         changed |= self.timer_content.map(display) != timer.map(display);
         self.timer_content = timer;
+        let plugin_widths = crate::ui::plugin::compact_widths(self.plugin_host.as_deref());
+        let shares_island = self
+            .activity_mgr
+            .current_excluding(TIMER_ACTIVITY)
+            .is_some()
+            || self
+                .config
+                .compact_widget_layout
+                .iter()
+                .any(|slot| slot.widget.is_some())
+            || plugin_widths.0 + plugin_widths.1 > 0.0;
+        let timer_orb = timer.is_some() && shares_island;
+        changed |= self.timer_orb != timer_orb;
+        self.timer_orb = timer_orb;
         changed |= Self::sync_local_activity(
             &mut self.activity_mgr,
             TIMER_ACTIVITY,
-            timer.is_some(),
+            timer.is_some() && !timer_orb,
             Priority::Medium,
             true,
             timer.map_or(0.0, |timer| countdown_width(timer, self.config.base_width)),

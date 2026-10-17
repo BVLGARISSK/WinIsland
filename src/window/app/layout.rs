@@ -37,11 +37,8 @@ impl App {
         } else {
             compact_height
         };
-        let multitask_extent = if self.config.device_status_indicators {
-            crate::ui::island::multitask::side_extent(compact_scale, compact_lyric_height)
-        } else {
-            0.0
-        };
+        let multitask_extent =
+            crate::ui::island::multitask::side_extent(compact_scale, compact_lyric_height);
         let width = compact_width
             .max(compact_overlay.width)
             .max(self.config.expanded_width * expanded_scale)
