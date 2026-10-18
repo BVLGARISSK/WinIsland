@@ -2,8 +2,8 @@ use winisland_core::config::AppConfigField;
 use winisland_render::{Image, Rect, Rgba};
 
 use crate::utils::settings_ui::items::{
-    CONTENT_PADDING, GROUP_INNER_PAD, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT, STEPPER_BTN_SIZE,
-    STEPPER_GAP, STEPPER_VALUE_W, SettingsItem,
+    CONTENT_PADDING, GROUP_INNER_PAD, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT, SettingsItem,
+    stepper_rects,
 };
 use crate::utils::settings_ui::{ClickResult, hit_test};
 
@@ -141,23 +141,6 @@ impl<A> SettingsPage<A> {
         self.push(SettingsItem::Spacer { height });
     }
 
-    pub(crate) fn row_font(
-        &mut self,
-        label: String,
-        btn_label: String,
-        reset_label: Option<String>,
-        action: A,
-    ) {
-        self.push_action(
-            SettingsItem::RowFontPicker {
-                label,
-                btn_label,
-                reset_label,
-            },
-            action,
-        );
-    }
-
     pub(crate) fn row_label(&mut self, label: String) {
         self.push(SettingsItem::RowLabel { label });
     }
@@ -265,16 +248,12 @@ impl PageInput {
         scroll_y: f32,
     ) -> Rect {
         let content_w = self.width - CONTENT_PADDING * 2.0;
-        let button_x = CONTENT_PADDING + content_w - GROUP_INNER_PAD - STEPPER_BTN_SIZE;
-        let value_x = button_x - STEPPER_GAP - STEPPER_VALUE_W;
-        let value_y =
-            self.row_top(page, item_index, scroll_y) + (ROW_HEIGHT - STEPPER_BTN_SIZE) / 2.0;
-        Rect::from_xywh(
-            SIDEBAR_W + value_x,
-            value_y,
-            STEPPER_VALUE_W,
-            STEPPER_BTN_SIZE,
-        )
+        let (value, _, _) = stepper_rects(
+            self.row_top(page, item_index, scroll_y),
+            ROW_HEIGHT,
+            content_w,
+        );
+        value.offset(winisland_render::Vec2::new(SIDEBAR_W, 0.0))
     }
 }
 

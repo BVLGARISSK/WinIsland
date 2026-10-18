@@ -1,10 +1,12 @@
 mod capture;
+mod outputs;
 mod volume;
 
 use std::cell::RefCell;
 
 use winisland_platform::{
-    AudioMeter, AudioProvider, PlatformError, ProcessCapture, VolumeEndpoint, VolumeState,
+    AudioMeter, AudioOutputDevice, AudioProvider, PlatformError, ProcessCapture, VolumeEndpoint,
+    VolumeState,
 };
 
 pub struct WindowsAudio;
@@ -75,5 +77,13 @@ impl AudioProvider for WindowsAudio {
                 .as_ref()
                 .is_some_and(VolumeEndpoint::take_device_change))
         })
+    }
+
+    fn output_devices(&self) -> Result<Vec<AudioOutputDevice>, PlatformError> {
+        outputs::output_devices()
+    }
+
+    fn set_default_output(&self, id: &str) -> Result<(), PlatformError> {
+        outputs::set_default_output(id)
     }
 }

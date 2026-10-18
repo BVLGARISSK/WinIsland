@@ -26,6 +26,7 @@ const ADAPTIVE_LEVEL_DECAY: f32 = 0.995;
 const ADAPTIVE_LEVEL_LEARNING_RATE: f32 = 0.005;
 const SPECTRUM_NORMALIZATION_GAIN: f32 = 2.3;
 const LOOPBACK_SAMPLE_RATE: usize = 48_000;
+const LOOPBACK_STALL_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct AtomicF32(AtomicU32);
 
@@ -142,6 +143,7 @@ struct ProcessCaptureContext {
     cancel: CancellationToken,
     generation: u32,
     worker_generation: Arc<AtomicU32>,
+    device_epoch: Arc<AtomicU32>,
     target_process_id: Arc<AtomicU32>,
     process_capture_active: Arc<AtomicBool>,
     spectrum: Arc<Mutex<[f32; SPECTRUM_BAND_COUNT]>>,
@@ -185,6 +187,7 @@ pub struct AudioProcessor {
     target_process_id: Arc<AtomicU32>,
     process_capture_active: Arc<AtomicBool>,
     worker_generation: Arc<AtomicU32>,
+    device_epoch: Arc<AtomicU32>,
     workers: Mutex<Option<CancellationToken>>,
 }
 
@@ -205,6 +208,7 @@ impl AudioProcessor {
             target_process_id,
             process_capture_active,
             worker_generation,
+            device_epoch: Arc::new(AtomicU32::new(0)),
             workers: Mutex::new(None),
         };
         log::info!("AudioProcessor created in idle state");
@@ -285,7 +289,8 @@ impl AudioProcessor {
         let target_app_id = self.target_app_id.clone();
         let target_process_id = self.target_process_id.clone();
         let worker_generation = self.worker_generation.clone();
-        tokio::task::spawn_blocking(move || {
+        let device_epoch = self.device_epoch.clone();
+        spawn_worker("audio-meter", move || {
             let mut meter = crate::platform::audio().open_meter().ok();
             let host = cpal::default_host();
             let mut current_device_name = None;
@@ -317,6 +322,7 @@ impl AudioProcessor {
                         }
 
                         if default_device_name.is_some() {
+                            device_epoch.fetch_add(1, Ordering::AcqRel);
                             current_device_name = default_device_name;
                             log::info!(
                                 "Audio meter thread: switched to device {current_device_name:?}"
@@ -368,13 +374,14 @@ impl AudioProcessor {
             cancel,
             generation,
             worker_generation: self.worker_generation.clone(),
+            device_epoch: self.device_epoch.clone(),
             target_process_id: self.target_process_id.clone(),
             process_capture_active: self.process_capture_active.clone(),
             spectrum: self.spectrum.clone(),
             gate: self.gate.clone(),
             gate_override: self.gate_override.clone(),
         };
-        tokio::task::spawn_blocking(move || {
+        spawn_worker("audio-process-capture", move || {
             let mut active_process_id = 0;
             let mut unavailable_process_id = None;
             let mut retry = Cooldown::ready();
@@ -426,7 +433,7 @@ impl AudioProcessor {
             worker_generation: worker_generation.clone(),
             generation,
         };
-        tokio::task::spawn_blocking(move || {
+        spawn_worker("audio-fallback-capture", move || {
             let host = cpal::default_host();
             let mut current_device_name = None;
             let mut current_stream: Option<Stream> = None;
@@ -572,16 +579,28 @@ fn capture_process_audio(
     context: &ProcessCaptureContext,
     analyzer: &mut SpectrumAnalyzer,
 ) -> Result<(), winisland_platform::PlatformError> {
+    let device_epoch = context.device_epoch.load(Ordering::Acquire);
     let mut capture = crate::platform::audio().open_process_capture(process_id)?;
     context.set_process_capture_active(true);
     let mut samples = Vec::new();
+    let mut last_packet = Instant::now();
     let result = (|| {
         while !context.cancel.is_cancelled()
             && context.is_current()
             && context.target_process_id.load(Ordering::Relaxed) == process_id
+            && context.device_epoch.load(Ordering::Acquire) == device_epoch
         {
             let captured = capture.read_cycle(&mut samples)?;
+            if !captured
+                && context.gate.get() > 0.0
+                && last_packet.elapsed() > LOOPBACK_STALL_TIMEOUT
+            {
+                return Err(winisland_platform::PlatformError::Unavailable(
+                    "loopback data after a device change",
+                ));
+            }
             if captured {
+                last_packet = Instant::now();
                 if analysis_enabled(&context.gate, &context.gate_override) {
                     for &sample in &samples {
                         analyzer.push_sample(
@@ -666,10 +685,22 @@ where
                 log::warn!("Audio capture stream interrupted: {error}; rebuilding");
                 stream_failed.store(true, Ordering::Release);
             }
-            _ => log::error!("Audio capture stream failed: {error}"),
+            _ => {
+                log::error!("Audio capture stream failed: {error}; rebuilding");
+                stream_failed.store(true, Ordering::Release);
+            }
         },
         None,
     )
+}
+
+fn spawn_worker(name: &str, work: impl FnOnce() + Send + 'static) {
+    if let Err(error) = std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(work)
+    {
+        log::error!("Audio worker '{name}' could not start: {error}");
+    }
 }
 
 fn analysis_enabled(gate: &AtomicF32, gate_override: &AtomicF32) -> bool {

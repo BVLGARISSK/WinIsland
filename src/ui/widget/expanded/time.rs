@@ -1,6 +1,6 @@
 use super::{draw_widget_rounded_background, draw_widget_text_centered};
 use crate::ui::widget::time_text::with_current_time_text;
-use winisland_render::{Painter, Rect, Rgba};
+use winisland_render::{FontWeight, Painter, Rect, Rgba};
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_time_widget(
@@ -24,7 +24,7 @@ pub fn draw_time_widget(
             text,
             Rect::from_xywh(x, y, w, h),
             size,
-            true,
+            FontWeight::SEMIBOLD,
             color,
         );
     });

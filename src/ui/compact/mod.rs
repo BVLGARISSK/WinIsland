@@ -244,6 +244,17 @@ impl CompactOverlay {
         self.volume_indicator.finish_drag()
     }
 
+    pub fn volume_level(&self) -> Option<(f32, bool)> {
+        self.volume_monitor.can_set_level().then(|| {
+            let snapshot = self.volume_monitor.snapshot();
+            (snapshot.level, snapshot.muted)
+        })
+    }
+
+    pub fn set_volume_level(&self, level: f32) {
+        self.volume_monitor.set_level(level);
+    }
+
     pub fn is_volume_dragging(&self) -> bool {
         self.volume_indicator.is_dragging()
     }

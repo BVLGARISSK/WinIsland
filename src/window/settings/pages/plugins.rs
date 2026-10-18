@@ -1,12 +1,13 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use winisland_render::FontStyle;
+use winisland_render::FontWeight;
 use winisland_render::{Image, ImageOptions, Mipmapped, Painter, Point, Radius, Rect, Rgba, Vec2};
 
 use crate::plugin::inventory::InstalledPlugin;
 use crate::utils::color::SettingsTheme;
 use crate::utils::color::settings_color;
-use crate::utils::settings_ui::items::{CONTENT_PADDING, SettingsItem};
+use crate::utils::settings_ui::items::{CONTENT_PADDING, SettingsItem, TOGGLE_H, TOGGLE_W};
 use crate::utils::settings_ui::{SettingsPainter, ellipsize_text};
 use winisland_core::i18n::tr;
 use winisland_plugin_package::marketplace::MarketplacePlugin;
@@ -289,7 +290,7 @@ impl SettingsApp {
         );
         let label = restart.then(|| tr("plugin_restart_now"));
         let label_w = label.as_ref().map_or(0.0, |label| {
-            fm.measure_text_cached(label, 12.0, FontStyle::bold())
+            fm.measure_text_cached(label, 12.0, FontWeight::MEDIUM)
         });
         let message = ellipsize_text(
             fm,
@@ -302,7 +303,7 @@ impl SettingsApp {
             &message,
             (status.left + 14.0, status.top + 29.0),
             12.0,
-            false,
+            FontWeight::REGULAR,
             theme.text_pri,
         );
         if let Some(label) = label {
@@ -310,7 +311,7 @@ impl SettingsApp {
                 &label,
                 (status.right - label_w - 14.0, status.top + 29.0),
                 12.0,
-                true,
+                FontWeight::MEDIUM,
                 theme.accent,
             );
         }
@@ -551,7 +552,7 @@ fn draw_plugin_tabs(painter: Painter<'_>, theme: &SettingsTheme, active: PluginP
     );
     painter.fill_round_rect(
         background,
-        Radius::uniform(9.0),
+        Radius::uniform(8.0),
         settings_color(theme.control_bg),
     );
     for tab in [PluginPageTab::Installed, PluginPageTab::Marketplace] {
@@ -565,13 +566,13 @@ fn draw_plugin_tabs(painter: Painter<'_>, theme: &SettingsTheme, active: PluginP
                     rect.height() - 4.0,
                 ),
                 Radius::uniform(7.0),
-                settings_color(theme.card_highlight),
+                settings_color(theme.accent),
             );
         }
         let text_color = if tab == active {
-            theme.text_pri
+            theme.selection_text
         } else {
-            theme.text_sec
+            theme.text_pri
         };
         SettingsPainter::new(painter).centered_text(
             &tr(match tab {
@@ -580,7 +581,11 @@ fn draw_plugin_tabs(painter: Painter<'_>, theme: &SettingsTheme, active: PluginP
             }),
             (rect.center_x(), rect.top + 21.0),
             12.0,
-            tab == active,
+            if tab == active {
+                FontWeight::MEDIUM
+            } else {
+                FontWeight::REGULAR
+            },
             text_color,
         );
     }
@@ -606,7 +611,7 @@ fn draw_section_title(painter: Painter<'_>, theme: &SettingsTheme, title: String
         &title,
         (CONTENT_PADDING + 4.0, PLUGIN_LIST_TOP + 18.0),
         13.0,
-        true,
+        FontWeight::SEMIBOLD,
         theme.text_pri,
     );
     PLUGIN_LIST_TOP + 30.0
@@ -651,12 +656,12 @@ fn draw_card_text(
 ) {
     let fm = FontManager::global();
     let available = (card.width() - reserved_width).max(20.0);
-    let name = ellipsize_text(fm, name, 14.0, FontStyle::bold(), available);
+    let name = ellipsize_text(fm, name, 14.0, FontWeight::SEMIBOLD, available);
     SettingsPainter::new(painter).text(
         &name,
         (card.left + 76.0, card.top + 29.0),
         14.0,
-        true,
+        FontWeight::SEMIBOLD,
         theme.text_pri,
     );
     let subtitle = ellipsize_text(fm, subtitle, 11.5, FontStyle::normal(), available);
@@ -664,7 +669,7 @@ fn draw_card_text(
         &subtitle,
         (card.left + 76.0, card.top + 51.0),
         11.5,
-        false,
+        FontWeight::REGULAR,
         theme.text_sec,
     );
 }
@@ -691,7 +696,7 @@ fn draw_marketplace_action(
         label,
         (rect.center_x(), rect.top + 19.0),
         11.0,
-        true,
+        FontWeight::MEDIUM,
         text_color,
     );
 }
@@ -701,7 +706,7 @@ fn marketplace_action_rect(card: Rect, width: f32) -> Rect {
 }
 
 fn action_button_width(label: &str) -> f32 {
-    (FontManager::global().measure_text_cached(label, 11.0, FontStyle::bold()) + 24.0)
+    (FontManager::global().measure_text_cached(label, 11.0, FontWeight::MEDIUM) + 24.0)
         .clamp(64.0, 112.0)
 }
 
@@ -721,7 +726,13 @@ fn draw_empty_state(
     detail: Option<&str>,
 ) {
     let text_painter = SettingsPainter::new(painter);
-    text_painter.centered_text(title, (width / 2.0, baseline), 13.0, false, theme.text_sec);
+    text_painter.centered_text(
+        title,
+        (width / 2.0, baseline),
+        13.0,
+        FontWeight::REGULAR,
+        theme.text_sec,
+    );
     if let Some(detail) = detail {
         let detail = ellipsize_text(
             FontManager::global(),
@@ -735,7 +746,7 @@ fn draw_empty_state(
             &detail,
             (width / 2.0, baseline + 21.0),
             10.5,
-            false,
+            FontWeight::REGULAR,
             detail_color,
         );
     }
@@ -752,7 +763,7 @@ fn draw_retry_button(painter: Painter<'_>, theme: &SettingsTheme, width: f32, y:
         &tr("plugin_marketplace_retry"),
         (rect.center_x(), rect.top + 18.0),
         11.0,
-        true,
+        FontWeight::MEDIUM,
         theme.accent,
     );
 }
@@ -762,20 +773,13 @@ fn retry_button_rect(width: f32, y: f32) -> Rect {
 }
 
 fn draw_toggle(painter: Painter<'_>, theme: &SettingsTheme, enabled: bool, x: f32, y: f32) {
-    let fill = if enabled {
-        theme.toggle_on
-    } else {
-        theme.toggle_off
-    };
-    painter.fill_round_rect(
-        Rect::from_xywh(x, y, 36.0, 20.0),
-        Radius::uniform(10.0),
-        settings_color(fill),
-    );
-    painter.fill_circle(
-        Point::new(x + if enabled { 26.0 } else { 10.0 }, y + 10.0),
-        8.0,
-        Rgba::WHITE,
+    crate::utils::settings_ui::draw_switch(
+        painter,
+        x + 37.0 - TOGGLE_W,
+        y + 10.0 - TOGGLE_H / 2.0,
+        f32::from(u8::from(enabled)),
+        true,
+        theme,
     );
 }
 
@@ -840,7 +844,7 @@ pub(super) fn draw_plugin_icon_data(
         &initial,
         (rect.center_x(), rect.center_y() + rect.height() * 0.16),
         rect.height() * 0.44,
-        true,
+        FontWeight::SEMIBOLD,
         Rgba::WHITE,
     );
 }

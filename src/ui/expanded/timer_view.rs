@@ -6,7 +6,7 @@ use crate::ui::rolling_time::{RollingTime, TimeAnchor};
 use crate::ui::widget::expanded::{draw_widget_text_centered, widget_grid_layout};
 use winisland_core::i18n::{tr, tr_args};
 use winisland_render::text::FontManager;
-use winisland_render::{Angle, Painter, Point, Radius, Rect, Rgba, StrokeCap};
+use winisland_render::{Angle, FontWeight, Painter, Point, Radius, Rect, Rgba, StrokeCap};
 
 const ORANGE: Rgba = Rgba::from_rgb(255, 159, 10);
 const GREEN: Rgba = Rgba::from_rgb(48, 209, 88);
@@ -518,8 +518,10 @@ fn end_time_text(remaining: Duration) -> String {
     format!("{:02}:{:02}", minutes / 60, minutes % 60)
 }
 
-fn fitted_size(text: &str, size: f32, max_width: f32) -> f32 {
-    let width = FontManager::global().measure_str(text, size, true).width();
+fn fitted_size(text: &str, size: f32, max_width: f32, weight: FontWeight) -> f32 {
+    let width = FontManager::global()
+        .measure_str(text, size, weight)
+        .width();
     if width <= max_width || width <= f32::EPSILON {
         size
     } else {
@@ -764,7 +766,12 @@ pub fn draw_timer_page(
         Phase::Paused { .. } => (tr("timer_pause"), ORANGE.with_alpha_f(0.85 * opacity)),
         Phase::Finished { .. } => (tr("timer_done"), ORANGE.with_alpha_f(opacity)),
     };
-    let caption_size = fitted_size(&caption, (radius * 0.16).max(8.0 * scale), inner_width);
+    let caption_size = fitted_size(
+        &caption,
+        (radius * 0.16).max(8.0 * scale),
+        inner_width,
+        FontWeight::MEDIUM,
+    );
     draw_widget_text_centered(
         painter,
         &caption,
@@ -775,7 +782,7 @@ pub fn draw_timer_page(
             caption_size * 1.4,
         ),
         caption_size,
-        true,
+        FontWeight::MEDIUM,
         caption_color,
     );
 
@@ -800,13 +807,14 @@ pub fn draw_timer_page(
             &label,
             chip.height() * 0.5,
             chip.width() - chip.height() * 0.5,
+            FontWeight::MEDIUM,
         );
         draw_widget_text_centered(
             painter,
             &label,
             *chip,
             label_size,
-            true,
+            FontWeight::MEDIUM,
             if selected {
                 ORANGE.with_alpha_f(enabled_factor * opacity)
             } else {
@@ -886,13 +894,14 @@ pub fn draw_timer_page(
                 &label,
                 (body.height() * 0.36).min(15.0 * scale),
                 body.width() - body.height() * 0.5,
+                FontWeight::SEMIBOLD,
             );
             draw_widget_text_centered(
                 painter,
                 &label,
                 rect,
                 label_size,
-                true,
+                FontWeight::SEMIBOLD,
                 tint.with_alpha_f(label_alpha * weight * enabled_factor * opacity),
             );
         }

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 
 use winisland_render::{
-    GradientStop, Image, ImageOptions, Painter, Path, Point, Radius, RasterSurface, Rect, Rgba,
-    Sampling, StrokeCap, StrokeJoin, TileMode, Vec2,
+    FontWeight, GradientStop, Image, ImageOptions, Painter, Path, Point, Radius, RasterSurface,
+    Rect, Rgba, Sampling, StrokeCap, StrokeJoin, TileMode, Vec2,
 };
 
 use crate::ui::expanded::widget_view::draw_prepared_widget;
@@ -90,10 +90,10 @@ fn draw_label(
     x: f32,
     y: f32,
     size: f32,
-    bold: bool,
+    weight: FontWeight,
     color: Rgba,
 ) {
-    SettingsPainter::new(painter).text(text, (x, y), size, bold, color);
+    SettingsPainter::new(painter).text(text, (x, y), size, weight, color);
 }
 
 fn draw_centered_label(painter: Painter<'_>, text: &str, rect: Rect, size: f32, color: Rgba) {
@@ -101,7 +101,7 @@ fn draw_centered_label(painter: Painter<'_>, text: &str, rect: Rect, size: f32, 
         text,
         (rect.center_x(), rect.center_y() + size * 0.35),
         size,
-        false,
+        FontWeight::REGULAR,
         color,
     );
 }
@@ -596,9 +596,9 @@ fn draw_preview_heading(
     keys: (&str, &str),
     theme: &SettingsTheme,
 ) {
-    for (key, offset, size, bold, color) in [
-        (keys.0, 25.0, 13.0, true, theme.text_pri),
-        (keys.1, 44.0, 11.0, false, theme.text_sec),
+    for (key, offset, size, weight, color) in [
+        (keys.0, 25.0, 13.0, FontWeight::SEMIBOLD, theme.text_pri),
+        (keys.1, 44.0, 11.0, FontWeight::REGULAR, theme.text_sec),
     ] {
         draw_label(
             painter,
@@ -606,7 +606,7 @@ fn draw_preview_heading(
             panel_x + 16.0,
             panel_y + offset,
             size,
-            bold,
+            weight,
             settings_color(color),
         );
     }

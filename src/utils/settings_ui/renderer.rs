@@ -17,7 +17,7 @@ use super::anim::SwitchAnimator;
 use super::items::SettingsItem;
 
 pub(crate) use crate::utils::color::settings_color;
-pub(crate) use controls::{SettingsPainter, ellipsize_text};
+pub(crate) use controls::{SettingsPainter, draw_switch, ellipsize_text, text_baseline};
 pub use items::{content_height, draw_items};
 
 pub struct ActiveStepperValue<'a> {

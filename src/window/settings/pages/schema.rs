@@ -99,6 +99,7 @@ impl SettingsApp {
         }
         match field {
             AppConfigField::SettingsTheme => self.update_theme(),
+            AppConfigField::FontWeight => crate::utils::fonts::apply(&self.config),
             AppConfigField::LyricsMode if self.config.lyrics_mode == "lrc" => {
                 self.config.show_lyrics = true;
             }

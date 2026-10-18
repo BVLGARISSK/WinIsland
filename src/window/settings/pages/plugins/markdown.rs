@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use winisland_render::text::{DrawTextCachedParams, FontManager};
-use winisland_render::{FontStyle, Painter, Point, Radius, Rect, Rgba, StrokeCap, Vec2};
+use winisland_render::{
+    FontStyle, FontWeight, Painter, Point, Radius, Rect, Rgba, StrokeCap, Vec2,
+};
 
 const BODY_SIZE: f32 = 12.0;
 const LINE_HEIGHT: f32 = 18.0;
@@ -618,7 +620,7 @@ impl<'a> LayoutBuilder<'a> {
             let mut style = span.style.clone();
             style.bold |= force_bold;
             let font_style = if style.bold {
-                FontStyle::bold()
+                FontStyle::from(FontWeight::SEMIBOLD)
             } else {
                 FontStyle::normal()
             };
@@ -755,7 +757,7 @@ pub(crate) fn render(params: MarkdownRenderParams<'_>) -> MarkdownRenderResult {
                         text,
                         *size,
                         if style.bold {
-                            FontStyle::bold()
+                            FontStyle::from(FontWeight::SEMIBOLD)
                         } else {
                             FontStyle::normal()
                         },
@@ -893,7 +895,11 @@ fn draw_text(
             x: 0.0,
             y: 0.0,
             size,
-            bold: style.bold,
+            weight: if style.bold {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::REGULAR
+            },
             color,
             blur: None,
         });
@@ -905,7 +911,11 @@ fn draw_text(
             x,
             y: baseline,
             size,
-            bold: style.bold,
+            weight: if style.bold {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::REGULAR
+            },
             color,
             blur: None,
         });

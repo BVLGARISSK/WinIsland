@@ -2,6 +2,7 @@ pub mod backdrop;
 pub mod blur;
 pub mod color;
 pub(crate) mod cover;
+pub(crate) mod fonts;
 pub mod logger;
 pub mod mouse;
 pub(crate) mod recorder;

@@ -5,21 +5,32 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
-use skia_safe::{Font, FontMgr, FontStyle as SkFontStyle, Paint, Path, Typeface, image_filters};
+use skia_safe::font_arguments::{VariationPosition, variation_position::Coordinate};
+use skia_safe::font_style::{Slant as SkSlant, Width as SkWidth};
+use skia_safe::{
+    Font, FontArguments, FontMgr, FontStyle as SkFontStyle, Paint, Path, Typeface, image_filters,
+    paint,
+};
 
 use crate::painter::Painter;
-use crate::types::{BlurSpec, FontStyle, Rgba, Slant};
+use crate::types::{BlurSpec, FontStyle, FontWeight, Rgba};
 
 mod plugin;
 pub use plugin::{PluginTextMetrics, PluginTextParams, PluginTextRun};
 
 static GLOBAL_FONT_MANAGER: OnceLock<FontManager> = OnceLock::new();
 
-type TextGroup = (String, Typeface, bool, f32);
+#[derive(Clone)]
+struct Face {
+    typeface: Typeface,
+    synthetic: f32,
+}
+
+type TextGroup = (String, Face, f32);
 type TextGroups = Vec<TextGroup>;
 type TextCacheValue = (f32, TextGroups);
 type TextCacheMap = HashMap<u64, TextCacheValue>;
-type TextPathCacheMap = HashMap<u64, Vec<Path>>;
+type TextPathCacheMap = HashMap<u64, Vec<(Path, f32)>>;
 type TextPrefixCacheMap = HashMap<u64, Vec<(usize, f32)>>;
 
 fn text_paint(color: Rgba, blur: Option<BlurSpec>) -> Paint {
@@ -39,16 +50,12 @@ fn text_paint(color: Rgba, blur: Option<BlurSpec>) -> Paint {
     paint
 }
 
-pub struct DrawTextInRectParams<'a> {
-    pub painter: Painter<'a>,
-    pub text: &'a str,
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub size: f32,
-    pub bold: bool,
-    pub color: Rgba,
-    pub blur: Option<BlurSpec>,
+fn emboldened_paint(paint: &Paint, stroke_width: f32) -> Paint {
+    let mut paint = paint.clone();
+    paint.set_style(paint::Style::StrokeAndFill);
+    paint.set_stroke_width(stroke_width);
+    paint.set_stroke_join(paint::Join::Round);
+    paint
 }
 
 pub struct DrawTextCachedParams<'a> {
@@ -57,33 +64,54 @@ pub struct DrawTextCachedParams<'a> {
     pub x: f32,
     pub y: f32,
     pub size: f32,
-    pub bold: bool,
+    pub weight: FontWeight,
     pub color: Rgba,
     pub blur: Option<BlurSpec>,
 }
 
+pub struct FontSelection<'a> {
+    pub family: Option<&'a str>,
+    pub file: Option<&'a str>,
+    pub weight_offset: i16,
+    pub locale: &'a str,
+}
+
 pub struct FontManager;
 
-struct CustomTypefaceState {
-    path: Option<String>,
-    typeface: Option<Typeface>,
-    load_attempted: bool,
+struct FontChoice {
+    family: Option<String>,
+    file: Option<String>,
+    weight_offset: i16,
+    locale: String,
+    user: Option<Option<Typeface>>,
 }
 
 thread_local! {
     static FONT_MGR: FontMgr = FontMgr::new();
-    static FALLBACK_CACHE: RefCell<HashMap<(char, u32), Typeface>> = RefCell::new(HashMap::new());
+    static SYSTEM_TYPEFACE: Typeface = system_typeface();
+    static FONT_CHOICE: RefCell<FontChoice> = const { RefCell::new(FontChoice {
+        family: None,
+        file: None,
+        weight_offset: 0,
+        locale: String::new(),
+        user: None,
+    }) };
+    static FACE_CACHE: RefCell<HashMap<(u32, u16), Face>> = RefCell::new(HashMap::new());
+    static FALLBACK_CACHE: RefCell<HashMap<(char, u16), Face>> = RefCell::new(HashMap::new());
     static TEXT_CACHE: RefCell<TextCacheMap> = RefCell::new(HashMap::new());
     static TEXT_PATH_CACHE: RefCell<TextPathCacheMap> = RefCell::new(HashMap::new());
     static TEXT_PREFIX_CACHE: RefCell<TextPrefixCacheMap> = RefCell::new(HashMap::new());
     static TEXT_WRAP_CACHE: RefCell<HashMap<u64, Vec<String>>> = RefCell::new(HashMap::new());
-    static CUSTOM_TYPEFACE: RefCell<CustomTypefaceState> = const { RefCell::new(CustomTypefaceState {
-        path: None,
-        typeface: None,
-        load_attempted: false,
-    }) };
 }
 
+const SYSTEM_FAMILIES: [&str; 3] = ["Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei"];
+const FALLBACK_FAMILIES: [&str; 4] = [
+    "Segoe UI Emoji",
+    "Microsoft YaHei",
+    "Segoe UI Symbol",
+    "Segoe UI",
+];
+const DEFAULT_FALLBACK_LOCALE: &str = "zh-CN";
 const FALLBACK_CACHE_LIMIT: usize = 2000;
 const TEXT_CACHE_LIMIT: usize = 500;
 const TEXT_PATH_CACHE_LIMIT: usize = 100;
@@ -91,19 +119,6 @@ const TEXT_PREFIX_CACHE_LIMIT: usize = 100;
 const TEXT_WRAP_CACHE_LIMIT: usize = 32;
 const NO_LINE_START: &str = ",.;:!?)%，。、；：！？）」』》";
 const TEXT_PREFIX_WIDTH_LIMIT: usize = 256;
-
-fn to_skia_font_style(style: FontStyle) -> SkFontStyle {
-    let slant = match style.slant() {
-        Slant::Upright => skia_safe::font_style::Slant::Upright,
-        Slant::Italic => skia_safe::font_style::Slant::Italic,
-        Slant::Oblique => skia_safe::font_style::Slant::Oblique,
-    };
-    SkFontStyle::new(
-        i32::from(style.weight().value()).into(),
-        i32::from(style.width().value()).into(),
-        slant,
-    )
-}
 
 fn evict_one_if_full<K, V>(cache: &mut HashMap<K, V>, limit: usize)
 where
@@ -153,42 +168,157 @@ fn hash_cache_key(text: &str, style: FontStyle, size: f32) -> u64 {
     hasher.finish()
 }
 
-fn needs_synthetic_bold(tf: &Typeface, style: FontStyle) -> bool {
-    style.weight().value() >= 600 && *tf.font_style().weight() < 600
-}
-
-fn make_font(tf: Typeface, size: f32, style: FontStyle) -> Font {
-    let embolden = needs_synthetic_bold(&tf, style);
-    let mut font = Font::from_typeface(tf, size);
-    font.set_subpixel(true);
-    if embolden {
-        font.set_embolden(true);
-    }
-    font
-}
-
-fn get_custom_typeface() -> Option<Typeface> {
-    CUSTOM_TYPEFACE.with(|cache| {
-        let mut state = cache.borrow_mut();
-        if state.load_attempted {
-            return state.typeface.clone();
-        }
-        state.load_attempted = true;
-        let path = state.path.clone()?;
-        let data = std::fs::read(path).ok()?;
-        let typeface = FONT_MGR.with(|mgr| mgr.new_from_data(&data, None));
-        state.typeface = typeface.clone();
-        typeface
+fn system_typeface() -> Typeface {
+    FONT_MGR.with(|mgr| {
+        SYSTEM_FAMILIES
+            .into_iter()
+            .find_map(|family| mgr.match_family_style(family, SkFontStyle::normal()))
+            .unwrap_or_else(|| {
+                mgr.legacy_make_typeface(None, SkFontStyle::normal())
+                    .unwrap()
+            })
     })
 }
 
-fn measure_group(text: &str, typeface: &Typeface, embolden: bool, size: f32) -> f32 {
-    let mut font = Font::from_typeface(typeface.clone(), size);
-    font.set_subpixel(true);
-    if embolden {
-        font.set_embolden(true);
+fn load_user_typeface(family: Option<&str>, file: Option<&str>) -> Option<Typeface> {
+    if let Some(path) = file {
+        let data = std::fs::read(path).ok()?;
+        return FONT_MGR.with(|mgr| mgr.new_from_data(&data, None));
     }
-    font.measure_str(text, None).0
+    let family = family?;
+    FONT_MGR.with(|mgr| mgr.match_family_style(family, SkFontStyle::normal()))
+}
+
+fn user_typeface() -> Option<Typeface> {
+    FONT_CHOICE.with(|choice| {
+        let mut choice = choice.borrow_mut();
+        if choice.user.is_none() {
+            let typeface = load_user_typeface(choice.family.as_deref(), choice.file.as_deref());
+            choice.user = Some(typeface);
+        }
+        choice.user.clone().flatten()
+    })
+}
+
+fn is_font_file(typeface: &Typeface) -> bool {
+    FONT_CHOICE.with(|choice| {
+        let choice = choice.borrow();
+        choice.file.is_some()
+            && choice
+                .user
+                .as_ref()
+                .and_then(Option::as_ref)
+                .is_some_and(|user| user.unique_id() == typeface.unique_id())
+    })
+}
+
+fn primary_typeface() -> Typeface {
+    user_typeface().unwrap_or_else(|| SYSTEM_TYPEFACE.with(Typeface::clone))
+}
+
+fn effective_weight(style: FontStyle) -> u16 {
+    let offset = FONT_CHOICE.with(|choice| choice.borrow().weight_offset);
+    (i32::from(style.weight().value()) + i32::from(offset)).clamp(100, 900) as u16
+}
+
+fn weight_axis(typeface: &Typeface) -> Option<(f32, f32)> {
+    typeface
+        .variation_design_parameters()?
+        .into_iter()
+        .find(|axis| axis.tag == Coordinate::wght)
+        .map(|axis| (axis.min, axis.max))
+}
+
+/// Stroke width, as a fraction of the font size, that stands in for weight a family lacks.
+fn synthetic_amount(typeface: &Typeface, missing: f32) -> f32 {
+    if missing < 40.0 || typeface.family_name().contains("Emoji") {
+        0.0
+    } else {
+        (0.005 + missing / 10_000.0).min(0.04)
+    }
+}
+
+/// Picks the heaviest face of the family that does not exceed `weight`.
+fn closest_face(base: &Typeface, weight: u16) -> Typeface {
+    let family = base.family_name();
+    let target = i32::from(weight);
+    FONT_MGR
+        .with(|mgr| {
+            let mut set = mgr.match_family(&family);
+            let mut below: Option<(i32, usize)> = None;
+            let mut above: Option<(i32, usize)> = None;
+            for index in 0..set.count() {
+                let (style, _) = set.style(index);
+                if style.slant() != SkSlant::Upright || style.width() != SkWidth::NORMAL {
+                    continue;
+                }
+                let face_weight = *style.weight();
+                if face_weight <= target {
+                    if below.is_none_or(|(best, _)| face_weight > best) {
+                        below = Some((face_weight, index));
+                    }
+                } else if above.is_none_or(|(best, _)| face_weight < best) {
+                    above = Some((face_weight, index));
+                }
+            }
+            below
+                .or(above)
+                .and_then(|(_, index)| set.new_typeface(index))
+        })
+        .unwrap_or_else(|| base.clone())
+}
+
+fn resolve_face(base: &Typeface, weight: u16) -> Face {
+    let key = (base.unique_id(), weight);
+    if let Some(face) = FACE_CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
+        return face;
+    }
+    let variable = weight_axis(base).and_then(|(min, max)| {
+        let target = f32::from(weight).clamp(min, max);
+        let coordinates = [Coordinate {
+            axis: Coordinate::wght,
+            value: target,
+        }];
+        let arguments = FontArguments::new().set_variation_design_position(VariationPosition {
+            coordinates: &coordinates,
+        });
+        base.clone_with_arguments(&arguments).map(|typeface| Face {
+            synthetic: synthetic_amount(base, f32::from(weight) - target),
+            typeface,
+        })
+    });
+    let face = variable.unwrap_or_else(|| {
+        let typeface = if is_font_file(base) {
+            base.clone()
+        } else {
+            closest_face(base, weight)
+        };
+        let missing = f32::from(weight) - *typeface.font_style().weight() as f32;
+        Face {
+            synthetic: synthetic_amount(&typeface, missing),
+            typeface,
+        }
+    });
+    FACE_CACHE.with(|cache| cache.borrow_mut().insert(key, face.clone()));
+    face
+}
+
+fn make_font(face: &Face, size: f32) -> Font {
+    let mut font = Font::from_typeface(face.typeface.clone(), size);
+    font.set_subpixel(true);
+    font
+}
+
+fn synthetic_stroke(face: &Face, size: f32) -> f32 {
+    size * face.synthetic * (18.0 / size).clamp(1.0, 1.4)
+}
+
+fn face_paint(paint: &Paint, face: &Face, size: f32) -> Option<Paint> {
+    (face.synthetic > 0.0).then(|| emboldened_paint(paint, synthetic_stroke(face, size)))
+}
+
+fn measure_group(text: &str, face: &Face, size: f32) -> f32 {
+    make_font(face, size).measure_str(text, None).0
 }
 
 fn typeface_supports_char(typeface: &Typeface, character: char) -> bool {
@@ -197,48 +327,52 @@ fn typeface_supports_char(typeface: &Typeface, character: char) -> bool {
     glyphs[0] != 0
 }
 
-fn get_typeface_for_char(c: char, style: FontStyle) -> (Typeface, bool) {
-    let sk_style = to_skia_font_style(style);
-    let s_key = style.cache_key();
-    FALLBACK_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if let Some(tf) = cache.get(&(c, s_key)) {
-            let embolden = needs_synthetic_bold(tf, style);
-            return (tf.clone(), embolden);
-        }
-        evict_one_if_full(&mut cache, FALLBACK_CACHE_LIMIT);
+fn typeface_supports_text(typeface: &Typeface, text: &str) -> bool {
+    let characters: Vec<i32> = text.chars().map(|character| character as i32).collect();
+    let mut glyphs = vec![0u16; characters.len()];
+    typeface.unichars_to_glyphs(&characters, &mut glyphs);
+    glyphs.iter().all(|glyph| *glyph != 0)
+}
 
-        if let Some(tf) = get_custom_typeface() {
-            let mut glyphs = [0u16; 1];
-            tf.unichars_to_glyphs(&[c as i32], &mut glyphs);
-            if glyphs[0] != 0 {
-                let embolden = needs_synthetic_bold(&tf, style);
-                cache.insert((c, s_key), tf.clone());
-                return (tf, embolden);
-            }
-        }
-
-        let tf = FONT_MGR.with(|mgr| {
-            mgr.match_family_style_character("", sk_style, &["zh-CN", "ja-JP", "en-US"], c as i32)
-                .filter(|tf| typeface_supports_char(tf, c))
-                .or_else(|| {
-                    [
-                        "Segoe UI Emoji",
-                        "Microsoft YaHei",
-                        "Segoe UI Symbol",
-                        "Segoe UI",
-                    ]
-                    .into_iter()
-                    .find_map(|family| {
-                        mgr.match_family_style(family, sk_style)
-                            .filter(|tf| typeface_supports_char(tf, c))
-                    })
+fn fallback_typeface(c: char) -> Typeface {
+    let locale = FONT_CHOICE.with(|choice| choice.borrow().locale.clone());
+    let locale = if locale.is_empty() {
+        DEFAULT_FALLBACK_LOCALE
+    } else {
+        locale.as_str()
+    };
+    FONT_MGR.with(|mgr| {
+        mgr.match_family_style_character("", SkFontStyle::normal(), &[locale], c as i32)
+            .filter(|tf| typeface_supports_char(tf, c))
+            .or_else(|| {
+                FALLBACK_FAMILIES.into_iter().find_map(|family| {
+                    mgr.match_family_style(family, SkFontStyle::normal())
+                        .filter(|tf| typeface_supports_char(tf, c))
                 })
-                .unwrap_or_else(|| mgr.legacy_make_typeface(None, sk_style).unwrap())
-        });
-        let embolden = needs_synthetic_bold(&tf, style);
-        cache.insert((c, s_key), tf.clone());
-        (tf, embolden)
+            })
+            .unwrap_or_else(|| {
+                mgr.legacy_make_typeface(None, SkFontStyle::normal())
+                    .unwrap()
+            })
+    })
+}
+
+fn face_for_char(c: char, weight: u16) -> Face {
+    FALLBACK_CACHE.with(|cache| {
+        if let Some(face) = cache.borrow().get(&(c, weight)) {
+            return face.clone();
+        }
+        let primary = primary_typeface();
+        let base = if typeface_supports_char(&primary, c) {
+            primary
+        } else {
+            fallback_typeface(c)
+        };
+        let face = resolve_face(&base, weight);
+        let mut cache = cache.borrow_mut();
+        evict_one_if_full(&mut cache, FALLBACK_CACHE_LIMIT);
+        cache.insert((c, weight), face.clone());
+        face
     })
 }
 
@@ -252,82 +386,81 @@ fn is_ascii_text(text: &str) -> bool {
     text.bytes().all(|b| b.is_ascii())
 }
 
+fn same_face(a: &Face, b: &Face) -> bool {
+    a.typeface.unique_id() == b.typeface.unique_id() && a.synthetic == b.synthetic
+}
+
 /// Compute text groups and total width.
 /// Falls back to a single typeface for ASCII-only text to skip per-char lookups.
 fn compute_text_groups(text: &str, size: f32, style: FontStyle) -> (f32, TextGroups) {
-    let sk_style = to_skia_font_style(style);
+    let weight = effective_weight(style);
+    let primary = primary_typeface();
+    if is_ascii_text(text) && typeface_supports_text(&primary, text) {
+        let face = resolve_face(&primary, weight);
+        let width = measure_group(text, &face, size);
+        return (width, vec![(text.to_string(), face, width)]);
+    }
+
     let mut current_w = 0.0;
     let mut groups: TextGroups = Vec::new();
-
-    if is_ascii_text(text) {
-        let tf = get_custom_typeface().unwrap_or_else(|| {
-            FONT_MGR.with(|mgr| {
-                mgr.match_family_style("Microsoft YaHei", sk_style)
-                    .or_else(|| mgr.match_family_style("Segoe UI", sk_style))
-                    .unwrap_or_else(|| mgr.legacy_make_typeface(None, sk_style).unwrap())
-            })
-        });
-        let embolden = needs_synthetic_bold(&tf, style);
-        let mut font = Font::from_typeface(tf.clone(), size);
-        font.set_subpixel(true);
-        if embolden {
-            font.set_embolden(true);
-        }
-        let (w, _) = font.measure_str(text, None);
-        current_w += w;
-        groups.push((text.to_string(), tf, embolden, w));
-        return (current_w, groups);
-    }
-
     let mut current_group = String::new();
-    let mut last_tf: Option<Typeface> = None;
-    let mut last_embolden = false;
+    let mut last_face: Option<Face> = None;
     for c in text.chars() {
-        let (tf, embolden) = if inherits_previous_typeface(c) {
-            last_tf
-                .as_ref()
-                .map(|tf| (tf.clone(), last_embolden))
-                .unwrap_or_else(|| get_typeface_for_char(c, style))
-        } else {
-            get_typeface_for_char(c, style)
+        let face = match &last_face {
+            Some(face) if inherits_previous_typeface(c) => face.clone(),
+            _ => face_for_char(c, weight),
         };
-        if let Some(ref ltf) = last_tf
-            && (ltf.unique_id() != tf.unique_id() || last_embolden != embolden)
+        if let Some(last) = &last_face
+            && !same_face(last, &face)
         {
             let group_text = std::mem::take(&mut current_group);
-            let width = measure_group(&group_text, ltf, last_embolden, size);
+            let width = measure_group(&group_text, last, size);
             current_w += width;
-            groups.push((group_text, ltf.clone(), last_embolden, width));
+            groups.push((group_text, last.clone(), width));
         }
-        last_tf = Some(tf);
-        last_embolden = embolden;
+        last_face = Some(face);
         current_group.push(c);
     }
-    if let Some(ltf) = last_tf {
-        let width = measure_group(&current_group, &ltf, last_embolden, size);
+    if let Some(last) = last_face {
+        let width = measure_group(&current_group, &last, size);
         current_w += width;
-        groups.push((current_group, ltf, last_embolden, width));
+        groups.push((current_group, last, width));
     }
 
     (current_w, groups)
 }
 
-fn compute_text_paths(text: &str, size: f32, style: FontStyle) -> Vec<Path> {
+fn compute_text_paths(text: &str, size: f32, style: FontStyle) -> Vec<(Path, f32)> {
     let (_, groups) = compute_text_groups(text, size, style);
     let mut x = 0.0;
     groups
         .into_iter()
-        .map(|(text, typeface, embolden, width)| {
-            let mut font = Font::from_typeface(typeface, size);
-            font.set_subpixel(true);
-            if embolden {
-                font.set_embolden(true);
-            }
+        .map(|(text, face, width)| {
+            let font = make_font(&face, size);
             let path = skia_safe::utils::text_utils::get_path(text.as_str(), (x, 0.0), &font);
             x += width;
-            path
+            (path, synthetic_stroke(&face, size))
         })
         .collect()
+}
+
+fn with_text_groups<R>(
+    text: &str,
+    size: f32,
+    style: FontStyle,
+    f: impl FnOnce(&TextCacheValue) -> R,
+) -> R {
+    let cache_key = hash_cache_key(text, style, size);
+    TEXT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.contains_key(&cache_key) {
+            evict_one_if_full(&mut cache, TEXT_CACHE_LIMIT);
+        }
+        let entry = cache
+            .entry(cache_key)
+            .or_insert_with(|| compute_text_groups(text, size, style));
+        f(entry)
+    })
 }
 
 impl FontManager {
@@ -335,51 +468,70 @@ impl FontManager {
         GLOBAL_FONT_MANAGER.get_or_init(|| FontManager)
     }
 
-    pub fn set_custom_font_path(&self, path: Option<&str>) {
-        let path = path.map(str::to_owned);
-        CUSTOM_TYPEFACE.with(|cache| {
-            let mut state = cache.borrow_mut();
-            state.path = path;
-            state.typeface = None;
-            state.load_attempted = false;
+    /// Selects the interface font: a font file wins over an installed family,
+    /// `weight_offset` shifts every requested weight, and `locale` (BCP 47) picks the
+    /// regional glyphs of fallback fonts.
+    pub fn configure(&self, selection: FontSelection<'_>) {
+        FONT_CHOICE.with(|choice| {
+            let mut choice = choice.borrow_mut();
+            choice.family = selection.family.map(str::to_owned);
+            choice.file = selection.file.map(str::to_owned);
+            choice.weight_offset = selection.weight_offset;
+            choice.locale = selection.locale.to_owned();
+            choice.user = None;
         });
-        self.clear_text_caches();
+        FACE_CACHE.with(|cache| cache.borrow_mut().clear());
         FALLBACK_CACHE.with(|cache| cache.borrow_mut().clear());
+        self.clear_text_caches();
+    }
+
+    /// Family name of the font chosen through [`Self::configure`], when it loaded.
+    pub fn custom_family_name(&self) -> Option<String> {
+        user_typeface().map(|typeface| typeface.family_name())
+    }
+
+    pub fn has_family(&self, family: &str) -> bool {
+        FONT_MGR.with(|mgr| mgr.match_family(family).count() > 0)
+    }
+
+    pub fn installed_families(&self) -> Vec<String> {
+        let mut families: Vec<String> = FONT_MGR.with(|mgr| {
+            mgr.family_names()
+                .filter(|family| !family.is_empty() && !family.starts_with('@'))
+                .collect()
+        });
+        families.sort_by_key(|family| family.to_lowercase());
+        families.dedup();
+        families
     }
 
     pub fn clear_text_caches(&self) {
         TEXT_CACHE.with(|cache| cache.borrow_mut().clear());
         TEXT_PATH_CACHE.with(|cache| cache.borrow_mut().clear());
         TEXT_PREFIX_CACHE.with(|cache| cache.borrow_mut().clear());
+        TEXT_WRAP_CACHE.with(|cache| cache.borrow_mut().clear());
     }
 
-    fn get_font(&self, size: f32, bold: bool) -> Font {
-        let style = if bold {
-            FontStyle::bold()
-        } else {
-            FontStyle::normal()
-        };
-        if let Some(tf) = get_custom_typeface() {
-            return make_font(tf, size, style);
-        }
-        let sk_style = to_skia_font_style(style);
-        let typeface = FONT_MGR.with(|mgr| {
-            mgr.match_family_style("Microsoft YaHei", sk_style)
-                .or_else(|| mgr.match_family_style("Segoe UI", sk_style))
-                .unwrap_or_else(|| mgr.legacy_make_typeface(None, sk_style).unwrap())
-        });
-        make_font(typeface, size, style)
+    pub fn measure_str(&self, text: &str, size: f32, weight: FontWeight) -> crate::types::Rect {
+        let paint = text_paint(Rgba::WHITE, None);
+        with_text_groups(text, size, weight.into(), |(_, groups)| {
+            let mut x = 0.0;
+            let mut bounds: Option<skia_safe::Rect> = None;
+            for (text, face, width) in groups {
+                let synthetic = face_paint(&paint, face, size);
+                let (_, rect) = make_font(face, size).measure_str(text, synthetic.as_ref());
+                let rect = rect.with_offset((x, 0.0));
+                bounds = Some(bounds.map_or(rect, |bounds| skia_safe::Rect::join2(bounds, rect)));
+                x += width;
+            }
+            let bounds = bounds.unwrap_or_default();
+            crate::types::Rect::from_ltrb(bounds.left, bounds.top, bounds.right, bounds.bottom)
+        })
     }
 
-    pub fn measure_str(&self, text: &str, size: f32, bold: bool) -> crate::types::Rect {
-        let font = self.get_font(size, bold);
-        let (_, bounds) = font.measure_str(text, None);
-        crate::types::Rect::from_ltrb(bounds.left, bounds.top, bounds.right, bounds.bottom)
-    }
-
-    pub fn ascent(&self, size: f32, bold: bool) -> f32 {
-        let font = self.get_font(size, bold);
-        let (_, metrics) = font.metrics();
+    pub fn ascent(&self, size: f32, weight: FontWeight) -> f32 {
+        let face = resolve_face(&primary_typeface(), effective_weight(weight.into()));
+        let (_, metrics) = make_font(&face, size).metrics();
         metrics.ascent
     }
 
@@ -389,51 +541,29 @@ impl FontManager {
         text: &str,
         at: crate::types::Point,
         size: f32,
-        bold: bool,
+        weight: FontWeight,
         color: Rgba,
     ) {
-        let font = self.get_font(size, bold);
-        let paint = text_paint(color, None);
-        painter.canvas().draw_str(text, (at.x, at.y), &font, &paint);
-    }
-
-    pub fn draw_text_in_rect(&self, params: DrawTextInRectParams<'_>) {
-        let font = self.get_font(params.size, params.bold);
-        let paint = text_paint(params.color, params.blur);
-        let canvas = params.painter.canvas();
-        let (_, rect) = font.measure_str(params.text, None);
-        if rect.width() <= params.w {
-            canvas.draw_str(
-                params.text,
-                (params.x + (params.w - rect.width()) / 2.0, params.y),
-                &font,
-                &paint,
-            );
-        } else {
-            let mut truncated = String::new();
-            let mut current_w = 0.0;
-            let (ellipsis_w, _) = font.measure_str("...", None);
-            let max_w = params.w - ellipsis_w;
-            for c in params.text.chars() {
-                let (cw, _) = font.measure_str(c.to_string(), None);
-                if current_w + cw > max_w {
-                    break;
-                }
-                current_w += cw;
-                truncated.push(c);
-            }
-            truncated.push_str("...");
-            canvas.draw_str(&truncated, (params.x, params.y), &font, &paint);
-        }
+        self.draw_text_cached(DrawTextCachedParams {
+            painter,
+            text,
+            x: at.x,
+            y: at.y,
+            size,
+            weight,
+            color,
+            blur: None,
+        });
     }
 
     pub fn wrap_text(
         &self,
         text: &str,
         size: f32,
-        style: FontStyle,
+        style: impl Into<FontStyle>,
         max_width: f32,
     ) -> Vec<String> {
+        let style = style.into();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         hash_cache_key(text, style, size).hash(&mut hasher);
         max_width.to_bits().hash(&mut hasher);
@@ -465,19 +595,8 @@ impl FontManager {
         lines
     }
 
-    pub fn measure_text_cached(&self, text: &str, size: f32, style: FontStyle) -> f32 {
-        let cache_key = hash_cache_key(text, style, size);
-        TEXT_CACHE.with(|cache| {
-            let mut cache_mut = cache.borrow_mut();
-            if !cache_mut.contains_key(&cache_key) {
-                evict_one_if_full(&mut cache_mut, TEXT_CACHE_LIMIT);
-            }
-            let entry = cache_mut.entry(cache_key).or_insert_with(|| {
-                let (width, groups) = compute_text_groups(text, size, style);
-                (width, groups)
-            });
-            entry.0
-        })
+    pub fn measure_text_cached(&self, text: &str, size: f32, style: impl Into<FontStyle>) -> f32 {
+        with_text_groups(text, size, style.into(), |(width, _)| *width)
     }
 
     pub fn measure_text_prefixes_cached(
@@ -486,8 +605,9 @@ impl FontManager {
         first_end: usize,
         second_end: usize,
         size: f32,
-        style: FontStyle,
+        style: impl Into<FontStyle>,
     ) -> (f32, f32) {
+        let style = style.into();
         let cache_key = hash_cache_key(text, style, size);
         TEXT_PREFIX_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
@@ -514,43 +634,31 @@ impl FontManager {
     }
 
     pub fn draw_text_cached(&self, params: DrawTextCachedParams<'_>) {
-        let style = if params.bold {
-            FontStyle::bold()
-        } else {
-            FontStyle::normal()
-        };
-        let cache_key = hash_cache_key(params.text, style, params.size);
         let paint = text_paint(params.color, params.blur);
-        TEXT_CACHE.with(|cache| {
-            let mut cache_mut = cache.borrow_mut();
-            if !cache_mut.contains_key(&cache_key) {
-                evict_one_if_full(&mut cache_mut, TEXT_CACHE_LIMIT);
-            }
-            let entry = cache_mut
-                .entry(cache_key)
-                .or_insert_with(|| compute_text_groups(params.text, params.size, style));
-            let (_, groups) = entry;
-            let canvas = params.painter.canvas();
-            let mut x = params.x;
-            let y = params.y;
-            for (s, tf, embolden, width) in groups {
-                let mut font = Font::from_typeface(tf.clone(), params.size);
-                font.set_subpixel(true);
-                if *embolden {
-                    font.set_embolden(true);
+        with_text_groups(
+            params.text,
+            params.size,
+            params.weight.into(),
+            |(_, groups)| {
+                let canvas = params.painter.canvas();
+                let mut x = params.x;
+                for (text, face, width) in groups {
+                    let font = make_font(face, params.size);
+                    let synthetic = face_paint(&paint, face, params.size);
+                    canvas.draw_str(
+                        &**text,
+                        (x, params.y),
+                        &font,
+                        synthetic.as_ref().unwrap_or(&paint),
+                    );
+                    x += *width;
                 }
-                canvas.draw_str(&**s, (x, y), &font, &paint);
-                x += *width;
-            }
-        });
+            },
+        );
     }
 
     pub fn draw_text_as_paths_cached(&self, params: DrawTextCachedParams<'_>) {
-        let style = if params.bold {
-            FontStyle::bold()
-        } else {
-            FontStyle::normal()
-        };
+        let style = FontStyle::from(params.weight);
         let cache_key = hash_cache_key(params.text, style, params.size);
         let paint = text_paint(params.color, params.blur);
         TEXT_PATH_CACHE.with(|cache| {
@@ -564,8 +672,12 @@ impl FontManager {
             let canvas = params.painter.canvas();
             canvas.save();
             canvas.translate((params.x, params.y));
-            for path in paths {
-                canvas.draw_path(path, &paint);
+            for (path, stroke_width) in paths.iter() {
+                if *stroke_width > 0.0 {
+                    canvas.draw_path(path, &emboldened_paint(&paint, *stroke_width));
+                } else {
+                    canvas.draw_path(path, &paint);
+                }
             }
             canvas.restore();
         });

@@ -592,6 +592,21 @@ impl WindowSystem for WindowsWindowSystem {
         }
     }
 
+    fn set_text_input(&self, id: WindowId, area: Option<winisland_platform::Rect>) {
+        let _ = with_window(id, |window| {
+            window.set_ime_allowed(area.is_some());
+            if let Some(area) = area {
+                window.set_ime_cursor_area(
+                    PhysicalPosition::new(area.left, area.top),
+                    PhysicalSize::new(
+                        (area.right - area.left).max(1) as u32,
+                        (area.bottom - area.top).max(1) as u32,
+                    ),
+                );
+            }
+        });
+    }
+
     fn set_titlebar_theme(&self, id: WindowId, is_light: bool) {
         let _ = with_window(id, |window| {
             if let Some(hwnd) = window_hwnd(window) {
@@ -678,7 +693,7 @@ impl WindowSystem for WindowsWindowSystem {
         Ok(())
     }
 
-    fn update_window_backdrop(&self, id: WindowId, width: f32, height: f32, radius: f32) -> bool {
+    fn update_window_backdrop(&self, id: WindowId, rect: [f32; 4], radius: f32) -> bool {
         let window_backdrop = WINDOWS.with(|windows| {
             windows
                 .borrow()
@@ -688,7 +703,7 @@ impl WindowSystem for WindowsWindowSystem {
         let Some(window_backdrop) = window_backdrop else {
             return false;
         };
-        if let Err(error) = window_backdrop.update(width, height, radius) {
+        if let Err(error) = window_backdrop.update(rect, radius) {
             log::warn!("Window backdrop update failed: {error}");
             let released = WINDOWS.with(|windows| {
                 windows

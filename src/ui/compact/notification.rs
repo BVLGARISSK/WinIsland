@@ -6,8 +6,8 @@ use winisland_platform::{
     IconBounds, NotificationFeed, NotificationIconData, NotificationMonitorUpdate,
     NotificationPayload,
 };
-use winisland_render::FontStyle;
 use winisland_render::text::DrawTextCachedParams;
+use winisland_render::{FontStyle, FontWeight};
 use winisland_render::{Image, ImageOptions, Painter, Radius, Rect, Rgba, Sampling, Vec2};
 
 use crate::ui::compact::{CompactOverlayState, CompactSize};
@@ -229,7 +229,7 @@ impl NotificationIndicator {
                     x: content_left,
                     y: top + 22.0 * scale,
                     size: 11.0 * scale,
-                    bold: false,
+                    weight: FontWeight::MEDIUM,
                     color: Rgba::WHITE.with_alpha((alpha as f32 * 0.65) as u8),
                     blur: None,
                 },
@@ -252,7 +252,7 @@ impl NotificationIndicator {
                 x: content_left,
                 y: title_y,
                 size: 13.0 * scale,
-                bold: true,
+                weight: FontWeight::SEMIBOLD,
                 color: Rgba::WHITE.with_alpha(alpha),
                 blur: None,
             },
@@ -267,8 +267,8 @@ impl NotificationIndicator {
                     text: &self.detail,
                     x: content_left,
                     y: title_y + DETAIL_LINE_GAP * scale,
-                    size: 11.0 * scale,
-                    bold: false,
+                    size: 12.0 * scale,
+                    weight: FontWeight::REGULAR,
                     color: Rgba::WHITE.with_alpha((alpha as f32 * 0.72) as u8),
                     blur: None,
                 },
@@ -324,11 +324,7 @@ fn draw_notification_text(
     max_width: f32,
     scale: f32,
 ) {
-    let style = if params.bold {
-        FontStyle::bold()
-    } else {
-        FontStyle::normal()
-    };
+    let style = FontStyle::from(params.weight);
     scroll.borrow_mut().draw(ScrollDrawParams {
         painter: params.painter,
         text: params.text,

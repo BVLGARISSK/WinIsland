@@ -88,7 +88,9 @@ pub struct App {
     config: AppConfig,
     expanded: bool,
     multitask: Multitask<crate::ui::island::multitask::activities::Activity>,
-    device_indicators: crate::ui::island::multitask::activities::DeviceIndicators,
+    status_indicators: crate::ui::island::multitask::activities::StatusIndicators,
+    timer_orb: bool,
+    orb_collapse_from: Option<f32>,
     device_feed: Option<Box<dyn DeviceActivityFeed>>,
     device_monitor_retry: Cooldown,
     expanded_press_started_inside: bool,
@@ -139,6 +141,10 @@ pub struct App {
     width_hiding_last_frame: bool,
     restoring_hide_width: bool,
     seek: SeekDrag,
+    audio_outputs: crate::core::audio_outputs::AudioOutputs,
+    audio_outputs_revision: u64,
+    audio_outputs_refreshed: Option<Instant>,
+    volume_dragging: bool,
     is_fullscreen_suppressed: bool,
     attention_pulse_started: Option<Instant>,
     is_cursor_suppressed: bool,
@@ -194,8 +200,7 @@ impl Default for App {
         let last_config_modified = std::fs::metadata(get_config_path())
             .and_then(|metadata| metadata.modified())
             .ok();
-        winisland_render::text::FontManager::global()
-            .set_custom_font_path(config.custom_font_path.as_deref());
+        crate::utils::fonts::apply(&config);
         let plugin_mgr = PluginManager::default();
         let plugin_host = match PluginHost::new(plugin_mgr.plugin_dir.clone(), 1) {
             Ok(host) => {
@@ -228,7 +233,9 @@ impl Default for App {
             config: config.clone(),
             expanded: false,
             multitask: Multitask::new(),
-            device_indicators: Default::default(),
+            status_indicators: Default::default(),
+            timer_orb: false,
+            orb_collapse_from: None,
             device_feed: None,
             device_monitor_retry: Cooldown::ready(),
             expanded_press_started_inside: false,
@@ -290,6 +297,10 @@ impl Default for App {
             width_hiding_last_frame: false,
             restoring_hide_width: false,
             seek: SeekDrag::default(),
+            audio_outputs: Default::default(),
+            audio_outputs_revision: u64::MAX,
+            audio_outputs_refreshed: None,
+            volume_dragging: false,
             is_fullscreen_suppressed: false,
             attention_pulse_started: None,
             is_cursor_suppressed: false,

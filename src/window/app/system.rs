@@ -610,7 +610,12 @@ impl App {
                     let old_style = self.config.island_style.clone();
                     let old_mini_shape = self.config.mini_cover_shape.clone();
                     let old_expanded_shape = self.config.expanded_cover_shape.clone();
-                    let old_font = self.config.custom_font_path.clone();
+                    let old_font = (
+                        self.config.custom_font_path.clone(),
+                        self.config.font_family.clone(),
+                        self.config.font_weight.clone(),
+                        self.config.language.clone(),
+                    );
                     let old_smtc_enabled = self.config.smtc_enabled;
                     let old_system_controls_overlay = self.config.system_controls_overlay;
                     let old_position_x_offset = self.config.position_x_offset;
@@ -666,9 +671,15 @@ impl App {
                         crate::ui::expanded::music_view::clear_cover_cache();
                     }
 
-                    if old_font != self.config.custom_font_path {
-                        winisland_render::text::FontManager::global()
-                            .set_custom_font_path(self.config.custom_font_path.as_deref());
+                    if old_font
+                        != (
+                            self.config.custom_font_path.clone(),
+                            self.config.font_family.clone(),
+                            self.config.font_weight.clone(),
+                            self.config.language.clone(),
+                        )
+                    {
+                        crate::utils::fonts::apply(&self.config);
                     }
 
                     let window_size = self.required_window_size();

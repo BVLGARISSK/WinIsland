@@ -1,8 +1,8 @@
 use super::{
     CONTENT_PADDING, COVER_FLIP_ANIM, COVER_FLIP_OLD_IMG, COVER_HOLD, COVER_SIZE, IMG_CACHE,
-    LOCAL_PLAY_STATE, NEXT_SKIP_ANIM, PAUSE_CONTROL_PRESS_VELOCITY, PAUSE_SPRING,
-    PLAYBACK_CONTROLS_TOP_GAP, PREV_SKIP_ANIM, PROGRESS_DRAGGING, PROGRESS_HOVER, PROGRESS_SMOOTH,
-    PROGRESS_TIME_GAP, PROGRESS_TIME_WIDTH, PROGRESS_TOP_GAP, SKIP_BUTTON_GAP,
+    LOCAL_PLAY_STATE, NEXT_SKIP_ANIM, PAUSE_CONTROL_PRESS_VELOCITY, PAUSE_SPRING, PREV_SKIP_ANIM,
+    PROGRESS_DRAGGING, PROGRESS_HOVER, PROGRESS_SMOOTH, PROGRESS_TIME_GAP, PROGRESS_TIME_WIDTH,
+    PROGRESS_TOP_GAP, SKIP_BUTTON_GAP,
 };
 
 pub fn set_progress_dragging(active: bool) {
@@ -75,27 +75,21 @@ pub fn get_cover_rect(ox: f32, oy: f32, scale: f32) -> (f32, f32, f32, f32) {
 }
 
 pub fn get_pause_btn_rect(ox: f32, oy: f32, w: f32, scale: f32) -> (f32, f32, f32, f32) {
-    let (_, img_y, img_size, _) = get_cover_rect(ox, oy, scale);
-    let bar_y = img_y + img_size + PROGRESS_TOP_GAP * scale;
-    let btn_cy = bar_y + PLAYBACK_CONTROLS_TOP_GAP * scale;
+    let btn_cy = super::audio_controls::lanes(ox, oy, w, scale).controls_y;
     let hit = 40.0 * scale;
     let btn_cx = ox + w / 2.0;
     (btn_cx - hit / 2.0, btn_cy - hit / 2.0, hit, hit)
 }
 
 pub fn get_prev_btn_rect(ox: f32, oy: f32, w: f32, scale: f32) -> (f32, f32, f32, f32) {
-    let (_, img_y, img_size, _) = get_cover_rect(ox, oy, scale);
-    let bar_y = img_y + img_size + PROGRESS_TOP_GAP * scale;
-    let btn_cy = bar_y + PLAYBACK_CONTROLS_TOP_GAP * scale;
+    let btn_cy = super::audio_controls::lanes(ox, oy, w, scale).controls_y;
     let hit = 36.0 * scale;
     let btn_cx = ox + w / 2.0 - SKIP_BUTTON_GAP * scale;
     (btn_cx - hit / 2.0, btn_cy - hit / 2.0, hit, hit)
 }
 
 pub fn get_next_btn_rect(ox: f32, oy: f32, w: f32, scale: f32) -> (f32, f32, f32, f32) {
-    let (_, img_y, img_size, _) = get_cover_rect(ox, oy, scale);
-    let bar_y = img_y + img_size + PROGRESS_TOP_GAP * scale;
-    let btn_cy = bar_y + PLAYBACK_CONTROLS_TOP_GAP * scale;
+    let btn_cy = super::audio_controls::lanes(ox, oy, w, scale).controls_y;
     let hit = 36.0 * scale;
     let btn_cx = ox + w / 2.0 + SKIP_BUTTON_GAP * scale;
     (btn_cx - hit / 2.0, btn_cy - hit / 2.0, hit, hit)

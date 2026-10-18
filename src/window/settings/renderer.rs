@@ -11,13 +11,16 @@ use winisland_core::i18n::tr;
 use winisland_plugin_host::draw::replay::PreparedFrame;
 use winisland_render::Renderer;
 use winisland_render::text::{DrawTextCachedParams, FontManager};
-use winisland_render::{Painter, Path, Point, Radius, Rect, Rgba, StrokeCap, StrokeJoin, Vec2};
+use winisland_render::{
+    FontWeight, Painter, Path, Point, Radius, Rect, Rgba, StrokeCap, StrokeJoin, Vec2,
+};
 
 use super::{
     PAGE_NAV_GAP, PAGE_NAV_HEIGHT, PAGE_NAV_WIDTH, PAGE_NAV_X, PAGE_NAV_Y, PLUGINS_PAGE_INDEX,
     POPUP_MENU_R, POPUP_OPACITY_KEY, SETTINGS_HEADER_H, SIDEBAR_W, SettingsApp, WIDGETS_PAGE_INDEX,
-    WINDOW_RADIUS, WidgetEditorMode,
+    WidgetEditorMode,
 };
+use crate::utils::settings_ui::chrome::{draw_chevron, draw_window_base, sidebar_panel};
 
 impl SettingsApp {
     fn draw_music_notice(&self, painter: Painter<'_>, width: f32) {
@@ -48,7 +51,7 @@ impl SettingsApp {
             x: 38.0,
             y: top + 32.0,
             size: 14.0,
-            bold: true,
+            weight: FontWeight::SEMIBOLD,
             color: text_color,
             blur: None,
         });
@@ -69,7 +72,7 @@ impl SettingsApp {
                 x: 38.0,
                 y,
                 size: 12.0,
-                bold: false,
+                weight: FontWeight::REGULAR,
                 color: text_color,
                 blur: None,
             });
@@ -87,11 +90,10 @@ impl SettingsApp {
             painter,
             text: "我已知晓",
             x: button.center_x()
-                - font.measure_text_cached("我已知晓", 12.0, winisland_render::FontStyle::bold())
-                    / 2.0,
+                - font.measure_text_cached("我已知晓", 12.0, FontWeight::MEDIUM) / 2.0,
             y: button.top + 18.0,
             size: 12.0,
-            bold: true,
+            weight: FontWeight::MEDIUM,
             color: Rgba::WHITE,
             blur: None,
         });
@@ -158,12 +160,17 @@ impl SettingsApp {
             Some(target) => target,
             None => return,
         };
+        let panel = sidebar_panel(SIDEBAR_W, win_h);
         if self.window_backdrop {
             self.window_backdrop = crate::platform::window().update_window_backdrop(
                 window_id,
-                ((SIDEBAR_W + WINDOW_RADIUS) * scale).min(p_w as f32),
-                (win_h * scale).min(p_h as f32),
-                WINDOW_RADIUS * scale,
+                [
+                    panel.left * scale,
+                    panel.top * scale,
+                    panel.width() * scale,
+                    (panel.height() * scale).min(p_h as f32 - panel.top * scale),
+                ],
+                crate::utils::settings_ui::chrome::BACKDROP_CORNER * scale,
             );
         }
         let render_result = renderer.frame(target, |drawing_context, painter| {
@@ -171,12 +178,8 @@ impl SettingsApp {
 
             let win_rect = Rect::from_xywh(0.0, 0.0, win_w, win_h);
             painter.save();
-            painter.clip_round_rect(win_rect, Radius::uniform(WINDOW_RADIUS));
-            let content_left = if self.window_backdrop { SIDEBAR_W } else { 0.0 };
-            painter.fill_rect(
-                Rect::from_xywh(content_left, 0.0, win_w - content_left, win_h),
-                settings_color(theme.win_bg),
-            );
+            crate::utils::settings_ui::chrome::clip_window(painter, win_rect);
+            draw_window_base(painter, &theme, win_rect, panel, self.window_backdrop);
 
             self.draw_sidebar(drawing_context, painter, &theme);
             self.draw_page_navigation(painter, &theme);
@@ -251,7 +254,23 @@ impl SettingsApp {
                     self.logical_mouse_pos.1 + self.scroll_y,
                 )),
             });
-            if self.active_page == 1 && self.show_music_notice() {
+            if let Some((top, height)) = self.search_flash_y() {
+                let strength = self.search.flash.map_or(0.0, |(_, _, started)| {
+                    1.0 - started.elapsed().as_secs_f32()
+                        / super::search::FLASH_DURATION.as_secs_f32()
+                });
+                painter.fill_round_rect(
+                    Rect::from_xywh(
+                        crate::utils::settings_ui::items::CONTENT_PADDING,
+                        top,
+                        content_w - crate::utils::settings_ui::items::CONTENT_PADDING * 2.0,
+                        height,
+                    ),
+                    Radius::uniform(8.0),
+                    theme.accent.with_alpha_f(0.16 * strength.clamp(0.0, 1.0)),
+                );
+            }
+            if self.active_page == super::MUSIC_PAGE_INDEX && self.show_music_notice() {
                 self.draw_music_notice(painter, content_w);
             }
             painter.restore();
@@ -274,12 +293,9 @@ impl SettingsApp {
             self.draw_popup(painter, &theme);
             painter.restore();
 
-            let border_rect = Rect::from_xywh(0.5, 0.5, win_w - 1.0, win_h - 1.0);
-            let border_radius = WINDOW_RADIUS - 0.5;
-            painter.stroke_round_rect(
-                border_rect,
-                Radius::uniform(border_radius),
-                1.0,
+            crate::utils::settings_ui::chrome::stroke_window(
+                painter,
+                win_rect,
                 settings_color(theme.separator),
             );
         });
@@ -391,121 +407,73 @@ impl SettingsApp {
     }
 
     fn draw_page_navigation(&self, painter: Painter<'_>, theme: &SettingsTheme) {
-        let back_center_x = PAGE_NAV_X + PAGE_NAV_WIDTH / 2.0;
-        let forward_center_x = back_center_x + PAGE_NAV_WIDTH + PAGE_NAV_GAP;
-        let center_y = PAGE_NAV_Y + PAGE_NAV_HEIGHT / 2.0;
+        let capsule = Rect::from_xywh(
+            PAGE_NAV_X,
+            PAGE_NAV_Y,
+            PAGE_NAV_WIDTH * 2.0 + PAGE_NAV_GAP,
+            PAGE_NAV_HEIGHT,
+        );
+        let radius = Radius::uniform(PAGE_NAV_HEIGHT / 2.0);
+        painter.fill_path_blurred(
+            &Path::rounded_rect(capsule.offset(Vec2::new(0.0, 1.0)), PAGE_NAV_HEIGHT / 2.0),
+            theme.button_shadow,
+            winisland_render::BlurSpec::uniform(2.5),
+        );
+        painter.fill_round_rect(capsule, radius, theme.button_bg);
         let (mouse_x, mouse_y) = self.logical_mouse_pos;
-
-        for (x, enabled, is_back) in [
-            (PAGE_NAV_X, self.can_navigate_back(), true),
-            (
-                PAGE_NAV_X + PAGE_NAV_WIDTH + PAGE_NAV_GAP,
-                self.can_navigate_forward(),
-                false,
-            ),
-        ] {
-            let rect = Rect::from_xywh(x, PAGE_NAV_Y, PAGE_NAV_WIDTH, PAGE_NAV_HEIGHT);
-            let outer_radius = PAGE_NAV_HEIGHT / 2.0;
-            let inner_radius = 3.0;
-            let (outer_corner, inner_corner) = (
-                Vec2::new(outer_radius, outer_radius),
-                Vec2::new(inner_radius, inner_radius),
+        for (index, enabled) in [self.can_navigate_back(), self.can_navigate_forward()]
+            .into_iter()
+            .enumerate()
+        {
+            let half = Rect::from_xywh(
+                PAGE_NAV_X + index as f32 * (PAGE_NAV_WIDTH + PAGE_NAV_GAP),
+                PAGE_NAV_Y,
+                PAGE_NAV_WIDTH,
+                PAGE_NAV_HEIGHT,
             );
-            let (first, second) = if is_back {
-                (outer_corner, inner_corner)
-            } else {
-                (inner_corner, outer_corner)
-            };
-            let radius = Radius {
-                top_left: first,
-                top_right: second,
-                bottom_right: second,
-                bottom_left: first,
-            };
-            let hovered = enabled && rect.contains(Point::new(mouse_x, mouse_y));
-            let fill = if !enabled {
-                theme.control_disabled
-            } else if hovered {
-                theme.control_hover
-            } else {
-                theme.control_bg
-            };
-            painter.fill_round_rect(rect, radius, settings_color(fill));
-            painter.stroke_round_rect(rect, radius, 0.75, settings_color(theme.control_border));
-        }
-
-        let back_color = if self.can_navigate_back() {
-            theme.text_pri
-        } else {
-            theme.disabled
-        };
-        if let Some(path) = Path::from_svg(&format!(
-            "M {} {} L {} {} L {} {}",
-            back_center_x + 2.5,
-            center_y - 5.0,
-            back_center_x - 2.5,
-            center_y,
-            back_center_x + 2.5,
-            center_y + 5.0,
-        )) {
-            painter.stroke_path(
-                &path,
-                1.8,
-                settings_color(back_color),
-                StrokeCap::Round,
-                StrokeJoin::Round,
+            if enabled && half.contains(Point::new(mouse_x, mouse_y)) {
+                painter.save();
+                painter.clip_rect(half);
+                painter.fill_round_rect(capsule, radius, theme.sidebar_hover);
+                painter.restore();
+            }
+            draw_chevron(
+                painter,
+                Point::new(
+                    half.center_x() + if index == 0 { 1.0 } else { -1.0 },
+                    half.center_y(),
+                ),
+                index == 0,
+                if enabled {
+                    theme.text_pri
+                } else {
+                    theme.disabled
+                },
             );
         }
-
-        let forward_color = if self.can_navigate_forward() {
-            theme.text_pri
-        } else {
-            theme.disabled
-        };
-        if let Some(path) = Path::from_svg(&format!(
-            "M {} {} L {} {} L {} {}",
-            forward_center_x - 2.5,
-            center_y - 5.0,
-            forward_center_x + 2.5,
-            center_y,
-            forward_center_x - 2.5,
-            center_y + 5.0,
-        )) {
-            painter.stroke_path(
-                &path,
-                1.8,
-                settings_color(forward_color),
-                StrokeCap::Round,
-                StrokeJoin::Round,
-            );
-        }
+        painter.stroke_round_rect(capsule.inset(0.25), radius, 0.5, theme.button_border);
     }
 
     fn draw_page_header(&self, painter: Painter<'_>, theme: &SettingsTheme, win_w: f32) {
         let title = self.page_title();
-        let title_x = PAGE_NAV_X + PAGE_NAV_WIDTH * 2.0 + PAGE_NAV_GAP + 14.0;
+        let title_x = PAGE_NAV_X + PAGE_NAV_WIDTH * 2.0 + PAGE_NAV_GAP + 12.0;
         let title = ellipsize_text(
             FontManager::global(),
             &title,
-            17.0,
-            winisland_render::FontStyle::bold(),
+            15.0,
+            FontWeight::SEMIBOLD,
             (win_w - title_x - 20.0).max(0.0),
         );
-        let paint = settings_color(theme.separator);
-        SettingsPainter::new(painter).text(
+        FontManager::global().draw_str(
+            painter,
             &title,
-            (title_x, 39.0),
-            17.0,
-            true,
+            Point::new(
+                title_x,
+                crate::utils::settings_ui::text_baseline(PAGE_NAV_Y + PAGE_NAV_HEIGHT / 2.0, 15.0),
+            ),
+            15.0,
+            FontWeight::SEMIBOLD,
             settings_color(theme.text_pri),
-        );
-
-        painter.stroke_line(
-            Point::new(SIDEBAR_W, SETTINGS_HEADER_H - 0.5),
-            Point::new(win_w, SETTINGS_HEADER_H - 0.5),
-            0.5,
-            paint,
-            StrokeCap::Butt,
         );
     }
 
@@ -514,28 +482,16 @@ impl SettingsApp {
             return;
         }
         let control = self.widget_mode_control_rect();
-        painter.fill_round_rect(
-            control,
-            Radius::uniform(8.0),
-            settings_color(theme.control_bg),
-        );
-        painter.stroke_round_rect(
-            control,
-            Radius::uniform(8.0),
-            0.75,
-            settings_color(theme.control_border),
-        );
-
+        painter.fill_round_rect(control, Radius::uniform(8.0), theme.control_bg);
         let selected = self.widget_mode_segment_rect(self.widget_editor_mode);
         painter.fill_round_rect(
-            Rect::from_xywh(
-                selected.left + 2.0,
-                selected.top + 2.0,
-                selected.width() - 4.0,
-                selected.height() - 4.0,
-            ),
+            selected.inset(2.0),
             Radius::uniform(6.0),
-            settings_color(theme.card_highlight),
+            if self.focused {
+                theme.accent
+            } else {
+                theme.card_highlight
+            },
         );
 
         for (mode, label) in [
@@ -544,27 +500,28 @@ impl SettingsApp {
             (WidgetEditorMode::Pages, tr("widget_mode_pages")),
         ] {
             let rect = self.widget_mode_segment_rect(mode);
-            let hovered = self.focused
-                && rect.contains(Point::new(
-                    self.logical_mouse_pos.0,
-                    self.logical_mouse_pos.1,
-                ));
-            let color = if mode == self.widget_editor_mode || hovered {
-                theme.text_pri
+            let active = mode == self.widget_editor_mode;
+            let color = if active && self.focused {
+                theme.selection_text
             } else {
-                theme.text_sec
+                theme.text_pri
             };
-            let size = 11.5;
-            let width = FontManager::global().measure_text_cached(
+            let weight = if active {
+                FontWeight::MEDIUM
+            } else {
+                FontWeight::REGULAR
+            };
+            let size = 12.0;
+            let width = FontManager::global().measure_text_cached(&label, size, weight);
+            FontManager::global().draw_str(
+                painter,
                 &label,
+                Point::new(
+                    rect.center_x() - width / 2.0,
+                    crate::utils::settings_ui::text_baseline(rect.center_y(), size),
+                ),
                 size,
-                winisland_render::FontStyle::normal(),
-            );
-            SettingsPainter::new(painter).text(
-                &label,
-                (rect.center_x() - width / 2.0, rect.center_y() + size * 0.35),
-                size,
-                mode == self.widget_editor_mode,
+                weight,
                 settings_color(color),
             );
         }
@@ -622,8 +579,17 @@ impl SettingsApp {
         );
 
         let text_alpha = (255.0 * opacity) as u8;
-        for (i, opt_label) in popup.options.iter().enumerate() {
+        let save_count = painter.save();
+        painter.clip_rect(popup.inner_rect());
+        for i in popup.visible_items() {
             let item_rect = popup.item_rect(i);
+            let opt_label = ellipsize_text(
+                FontManager::global(),
+                &popup.options[i],
+                13.0,
+                FontWeight::REGULAR,
+                item_rect.width() - 36.0,
+            );
 
             if popup.hover_idx == Some(i) {
                 let a = theme.selection_bg.a() as f32 * opacity;
@@ -647,10 +613,13 @@ impl SettingsApp {
             let text_color =
                 Rgba::from_argb(text_alpha, text_base.r(), text_base.g(), text_base.b());
             SettingsPainter::new(painter).text(
-                opt_label,
-                (item_rect.left + 8.0, item_rect.top + 19.0),
-                12.0,
-                false,
+                &opt_label,
+                (
+                    item_rect.left + 10.0,
+                    crate::utils::settings_ui::text_baseline(item_rect.center_y(), 13.0),
+                ),
+                13.0,
+                FontWeight::REGULAR,
                 settings_color(text_color),
             );
 
@@ -701,6 +670,32 @@ impl SettingsApp {
                     StrokeCap::Butt,
                 );
             }
+        }
+        painter.restore_to(save_count);
+        if let Some(thumb) = popup.thumb_rect() {
+            let (mouse_x, mouse_y) = self.logical_mouse_pos;
+            let active = popup.scroll_drag.is_some() || popup.scrollbar_hovered(mouse_x, mouse_y);
+            let thumb = if active {
+                Rect::from_xywh(
+                    thumb.center_x() - thumb.width() * 0.75,
+                    thumb.top,
+                    thumb.width() * 1.5,
+                    thumb.height(),
+                )
+            } else {
+                thumb
+            };
+            let emphasis = if active { 1.6 } else { 1.0 };
+            painter.fill_round_rect(
+                thumb,
+                Radius::uniform(thumb.width() / 2.0),
+                settings_color(Rgba::from_argb(
+                    (theme.scrollbar.a() as f32 * opacity * emphasis).min(255.0) as u8,
+                    theme.scrollbar.r(),
+                    theme.scrollbar.g(),
+                    theme.scrollbar.b(),
+                )),
+            );
         }
     }
 }

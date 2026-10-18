@@ -415,10 +415,11 @@ impl WindowBackdrop {
         })
     }
 
-    pub(crate) fn update(&self, width: f32, height: f32, radius: f32) -> windows::core::Result<()> {
+    pub(crate) fn update(&self, rect: [f32; 4], radius: f32) -> windows::core::Result<()> {
+        let [x, y, width, height] = rect;
         let shape = (width > 0.0 && height > 0.0).then(|| ShapeGeometry {
-            x: 0.0,
-            y: 0.0,
+            x: quantize(x),
+            y: quantize(y),
             width: quantize(width),
             height: quantize(height),
             radius: quantize(radius.max(0.0)),

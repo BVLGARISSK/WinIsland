@@ -1,4 +1,5 @@
 pub mod anim;
+pub(crate) mod chrome;
 pub mod input;
 pub mod items;
 pub mod renderer;
@@ -13,4 +14,6 @@ pub use input::{
     widget_preview_hit_test, widget_source_span,
 };
 pub use renderer::{ActiveStepperValue, DrawItemsParams, content_height, draw_items};
-pub(crate) use renderer::{SettingsPainter, ellipsize_text, settings_color};
+pub(crate) use renderer::{
+    SettingsPainter, draw_switch, ellipsize_text, settings_color, text_baseline,
+};

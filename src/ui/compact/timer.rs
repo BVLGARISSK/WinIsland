@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use quick_xml::events::Event;
 use winisland_core::i18n::tr;
 use winisland_render::text::FontManager;
-use winisland_render::{Angle, Painter, Path, Point, Rect, Rgba, StrokeCap, Vec2};
+use winisland_render::{Angle, FontWeight, Painter, Path, Point, Rect, Rgba, StrokeCap, Vec2};
 
 use crate::ui::rolling_time::{RollingTime, TimeAnchor};
 
@@ -129,15 +129,22 @@ fn draw_finished_icon(painter: Painter<'_>, center: Point, scale: f32, color: Rg
     painter.restore_to(saved);
 }
 
-fn draw_text(painter: Painter<'_>, text: &str, rect: Rect, size: f32, bold: bool, color: Rgba) {
+fn draw_text(
+    painter: Painter<'_>,
+    text: &str,
+    rect: Rect,
+    size: f32,
+    weight: FontWeight,
+    color: Rgba,
+) {
     let fonts = FontManager::global();
-    let width = fonts.measure_str(text, size, bold).width();
+    let width = fonts.measure_str(text, size, weight).width();
     let size = if width > rect.width() && width > 0.0 {
         size * rect.width().max(0.0) / width
     } else {
         size
     };
-    let bounds = fonts.measure_str(text, size, bold);
+    let bounds = fonts.measure_str(text, size, weight);
     fonts.draw_str(
         painter,
         text,
@@ -146,7 +153,7 @@ fn draw_text(painter: Painter<'_>, text: &str, rect: Rect, size: f32, bold: bool
             rect.center_y() - bounds.height() / 2.0 - bounds.top,
         ),
         size,
-        bold,
+        weight,
         color,
     );
 }
@@ -154,6 +161,18 @@ fn draw_text(painter: Painter<'_>, text: &str, rect: Rect, size: f32, bold: bool
 pub(crate) fn countdown_width(timer: TimerContent, base_width: f32) -> f32 {
     let width = RollingTime::measure_width(&timer.time_text(), FONT_SIZE);
     base_width.max(EDGE_INSET * 2.0 + ICON_SIZE + 16.0 + width)
+}
+
+pub(crate) fn draw_timer_icon(
+    painter: Painter<'_>,
+    center: Point,
+    scale: f32,
+    progress: f32,
+    paused: bool,
+    alpha: f32,
+) {
+    let color = YELLOW.with_alpha_f(alpha * if paused { 0.65 } else { 1.0 });
+    draw_progress(painter, center, scale, progress, color);
 }
 
 pub(crate) fn draw_countdown(
@@ -308,7 +327,7 @@ impl TimerFinishedIndicator {
                 22.0 * scale,
             ),
             18.0 * scale,
-            false,
+            FontWeight::SEMIBOLD,
             color,
         );
         let center = Point::new(button.center_x(), button.center_y());

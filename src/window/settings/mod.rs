@@ -1,7 +1,7 @@
 use crate::platform::{MonitorRef, WindowRef, window};
 use crate::plugin::inventory::InstalledPlugin;
 use crate::utils::color::{SettingsTheme, dark_settings_theme, light_settings_theme};
-use crate::utils::settings_ui::items::{POPUP_MENU_R, SIDEBAR_PAD, SettingsItem};
+use crate::utils::settings_ui::items::{POPUP_MENU_R, SettingsItem};
 use crate::utils::settings_ui::{
     SwitchAnimator, WidgetDropAnimation, WidgetEditorHover, WidgetEditorMode, WidgetEditorSlot,
     WidgetSource,
@@ -28,31 +28,73 @@ pub mod pages;
 mod popup;
 pub mod renderer;
 mod resource_editor;
+mod search;
 pub mod sidebar;
 
 pub(crate) use popup::PopupState;
 
-pub(crate) const WIN_W: f32 = 760.0;
+pub(crate) const WIN_W: f32 = 780.0;
 pub(crate) const WIN_H: f32 = 680.0;
-pub(crate) const SIDEBAR_W: f32 = 184.0;
-pub(crate) const SIDEBAR_ROW_H: f32 = 34.0;
+pub(crate) const SIDEBAR_W: f32 = 216.0;
+pub(crate) const SIDEBAR_ROW_H: f32 = 30.0;
 pub(crate) const SIDEBAR_ROW_GAP: f32 = 2.0;
-pub(crate) const SIDEBAR_START_Y: f32 = 64.0;
-pub(crate) const BUILTIN_SIDEBAR_PAGE_COUNT: usize = 5;
-pub(crate) const GENERAL_PAGE_INDEX: usize = 0;
-pub(crate) const WIDGETS_PAGE_INDEX: usize = 2;
-pub(crate) const PLUGINS_PAGE_INDEX: usize = 3;
-pub(crate) const PAGE_NAV_X: f32 = SIDEBAR_W + 18.0;
-pub(crate) const PAGE_NAV_Y: f32 = 18.0;
-pub(crate) const PAGE_NAV_WIDTH: f32 = 34.0;
-pub(crate) const PAGE_NAV_HEIGHT: f32 = 28.0;
-pub(crate) const PAGE_NAV_GAP: f32 = 2.0;
-pub(crate) const SETTINGS_HEADER_H: f32 = 64.0;
-pub(crate) const WINDOW_RADIUS: f32 = 16.0;
-pub(crate) const WINDOW_CONTROL_CENTERS: [(f32, f32); 3] =
-    [(20.0, 20.0), (40.0, 20.0), (60.0, 20.0)];
-pub(crate) const WINDOW_CONTROL_RADIUS: f32 = 6.0;
-const WINDOW_CONTROL_HIT_RADIUS: f32 = 8.0;
+pub(crate) const SIDEBAR_START_Y: f32 = 84.0;
+pub(crate) const BUILTIN_SIDEBAR_PAGE_COUNT: usize = BuiltinPage::ALL.len();
+pub(crate) const GENERAL_PAGE_INDEX: usize = BuiltinPage::General as usize;
+pub(crate) const MUSIC_PAGE_INDEX: usize = BuiltinPage::Music as usize;
+pub(crate) const WIDGETS_PAGE_INDEX: usize = BuiltinPage::Widgets as usize;
+pub(crate) const PLUGINS_PAGE_INDEX: usize = BuiltinPage::Plugins as usize;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BuiltinPage {
+    General,
+    Appearance,
+    Layout,
+    Behavior,
+    Alerts,
+    Music,
+    Widgets,
+    Plugins,
+    About,
+}
+
+impl BuiltinPage {
+    pub(crate) const ALL: [Self; 9] = [
+        Self::General,
+        Self::Appearance,
+        Self::Layout,
+        Self::Behavior,
+        Self::Alerts,
+        Self::Music,
+        Self::Widgets,
+        Self::Plugins,
+        Self::About,
+    ];
+
+    pub(crate) fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
+
+    pub(crate) fn title_key(self) -> &'static str {
+        match self {
+            Self::General => "tab_general",
+            Self::Appearance => "tab_appearance",
+            Self::Layout => "tab_layout",
+            Self::Behavior => "tab_behavior",
+            Self::Alerts => "tab_alerts",
+            Self::Music => "tab_music",
+            Self::Widgets => "tab_widgets",
+            Self::Plugins => "tab_plugins",
+            Self::About => "tab_about",
+        }
+    }
+}
+pub(crate) const PAGE_NAV_X: f32 = SIDEBAR_W + 8.0;
+pub(crate) const PAGE_NAV_Y: f32 = 11.0;
+pub(crate) const PAGE_NAV_WIDTH: f32 = 32.0;
+pub(crate) const PAGE_NAV_HEIGHT: f32 = 32.0;
+pub(crate) const PAGE_NAV_GAP: f32 = 0.0;
+pub(crate) const SETTINGS_HEADER_H: f32 = 54.0;
 const SCROLLBAR_BOTTOM_INSET: f32 = 8.0;
 const SCROLLBAR_RIGHT_INSET: f32 = 5.0;
 const SCROLLBAR_THUMB_MIN_H: f32 = 32.0;
@@ -61,8 +103,9 @@ const SCROLLBAR_W: f32 = 4.0;
 const SCROLLBAR_HIT_W: f32 = 16.0;
 const CURSOR_MOVE_THRESHOLD: f32 = 0.5;
 const MOUSE_WHEEL_LINE_HEIGHT: f32 = 40.0;
-const SIDEBAR_TITLE_HEIGHT: f32 = 60.0;
+const SIDEBAR_TITLE_HEIGHT: f32 = 78.0;
 const POPUP_CLOSE_SPEED: f32 = 0.3;
+const SIDEBAR_HOVER_SLOTS: usize = 64;
 const WINDOW_CONTROL_CLOSE: usize = 0;
 const WINDOW_CONTROL_MINIMIZE: usize = 1;
 const WIDGET_HOVER_RATE: f32 = 18.0;
@@ -78,15 +121,9 @@ fn animate_towards(value: &mut f32, target: f32, rate: f32, dt: f32) -> bool {
     (*value - previous).abs() > f32::EPSILON
 }
 
-pub(crate) fn window_control_at(x: f32, y: f32) -> Option<usize> {
-    WINDOW_CONTROL_CENTERS.iter().position(|&(cx, cy)| {
-        (x - cx).powi(2) + (y - cy).powi(2) <= WINDOW_CONTROL_HIT_RADIUS.powi(2)
-    })
-}
-
-pub(crate) fn window_controls_hovered(x: f32, y: f32) -> bool {
-    (10.0..=70.0).contains(&x) && (10.0..=30.0).contains(&y)
-}
+pub(crate) use crate::utils::settings_ui::chrome::{
+    traffic_light_at as window_control_at, traffic_lights_hovered as window_controls_hovered,
+};
 
 fn scroll_delta(delta: MouseWheelDelta) -> f32 {
     match delta {
@@ -211,6 +248,7 @@ pub struct SettingsApp {
     pub(crate) sidebar_hover: i32,
     pub(crate) popup: Option<PopupState>,
     pub(crate) number_input: Option<NumberInput>,
+    pub(crate) search: search::SearchState,
     pub(crate) is_light: bool,
     pub(crate) cached_items: Vec<SettingsItem>,
     pub(crate) items_dirty: bool,
@@ -291,13 +329,9 @@ impl SettingsApp {
     }
 
     pub(crate) fn page_title(&self) -> String {
-        match self.active_page {
-            0 => winisland_core::i18n::tr("tab_general"),
-            1 => winisland_core::i18n::tr("tab_music"),
-            2 => winisland_core::i18n::tr("tab_widgets"),
-            3 => winisland_core::i18n::tr("tab_plugins"),
-            4 => winisland_core::i18n::tr("tab_about"),
-            _ => self
+        match BuiltinPage::from_index(self.active_page) {
+            Some(page) => winisland_core::i18n::tr(page.title_key()),
+            None => self
                 .active_plugin_settings_page()
                 .map(|page| page.title.clone())
                 .unwrap_or_default(),
@@ -349,6 +383,7 @@ impl SettingsApp {
             sidebar_hover: -1,
             popup: None,
             number_input: None,
+            search: search::SearchState::default(),
             is_light: false,
             cached_items: Vec::new(),
             items_dirty: true,
@@ -628,10 +663,19 @@ impl SettingsApp {
             PlatformEvent::KeyInput {
                 key,
                 state: InputState::Pressed,
+                text,
                 ..
             } => {
-                self.handle_pressed_key(&key);
+                if !self.handle_popup_key(&key, text.as_deref())
+                    && !self.handle_search_key(&key, text.as_deref())
+                {
+                    self.handle_pressed_key(&key);
+                }
             }
+            PlatformEvent::ImeCommit { text, .. } => {
+                self.insert_search_text(&text);
+            }
+            PlatformEvent::ImeComposition { text, .. } => self.set_search_composition(&text),
             PlatformEvent::CursorMoved { position, .. } => self.handle_cursor_moved(position),
             PlatformEvent::CursorLeft { .. } => self.handle_cursor_left(),
             PlatformEvent::DroppedFile { path, .. }
@@ -820,12 +864,13 @@ impl SettingsApp {
             || (new_position.1 - self.last_hover_mouse_pos.1).abs() > CURSOR_MOVE_THRESHOLD;
         self.logical_mouse_pos = new_position;
         self.update_scroll_drag(new_position.1);
+        if let Some(popup) = self.popup.as_mut()
+            && popup.drag_scroll(new_position.1)
+        {
+            self.request_redraw();
+        }
 
-        let mut redraw = (matches!(
-            self.active_page,
-            1 | WIDGETS_PAGE_INDEX | PLUGINS_PAGE_INDEX
-        ) || self.active_plugin_settings_page().is_some())
-            && mouse_moved;
+        let mut redraw = mouse_moved;
         let dots_hovered = self.focused && window_controls_hovered(new_position.0, new_position.1);
         if dots_hovered != self.dots_hovered {
             self.dots_hovered = dots_hovered;
@@ -996,6 +1041,10 @@ impl SettingsApp {
         let Some(popup) = &mut self.popup else {
             return false;
         };
+        if popup.keyboard_anchor == Some(self.logical_mouse_pos) {
+            return false;
+        }
+        popup.keyboard_anchor = None;
         let (mouse_x, mouse_y) = self.logical_mouse_pos;
         let hover_index = popup.hit_test_item(mouse_x, mouse_y);
         if hover_index == popup.hover_idx {
@@ -1007,20 +1056,17 @@ impl SettingsApp {
 
     fn update_sidebar_hover(&mut self) -> bool {
         let (mouse_x, mouse_y) = self.logical_mouse_pos;
-        let hover_index = (mouse_x < SIDEBAR_W).then(|| {
-            (0..self.sidebar_page_count()).find(|index| {
-                let row_y = SIDEBAR_START_Y + *index as f32 * (SIDEBAR_ROW_H + SIDEBAR_ROW_GAP);
-                (row_y..=row_y + SIDEBAR_ROW_H).contains(&mouse_y)
-                    && (SIDEBAR_PAD..=SIDEBAR_W - SIDEBAR_PAD).contains(&mouse_x)
-            })
-        });
-        let hover_index = hover_index.flatten();
+        let point = winisland_render::Point::new(mouse_x, mouse_y);
+        let rows = self.sidebar_rows();
+        let hover_index = (mouse_x < SIDEBAR_W)
+            .then(|| rows.iter().position(|(_, rect)| rect.contains(point)))
+            .flatten();
         let sidebar_hover = hover_index.map_or(-1, |index| index as i32);
         if sidebar_hover == self.sidebar_hover {
             return false;
         }
         self.sidebar_hover = sidebar_hover;
-        for index in 0..self.sidebar_page_count() {
+        for index in 0..rows.len().max(SIDEBAR_HOVER_SLOTS) {
             self.anim.set(
                 SIDEBAR_KEY_BASE + index as u64,
                 if hover_index == Some(index) { 1.0 } else { 0.0 },
@@ -1030,7 +1076,7 @@ impl SettingsApp {
     }
 
     fn handle_cursor_left(&mut self) {
-        if self.active_page == 1 && self.show_music_notice() {
+        if self.active_page == MUSIC_PAGE_INDEX && self.show_music_notice() {
             self.logical_mouse_pos = (-1.0, -1.0);
             self.request_redraw();
         }
@@ -1054,6 +1100,19 @@ impl SettingsApp {
         if self.resource_editor_open {
             return;
         }
+        let (mouse_x, mouse_y) = self.logical_mouse_pos;
+        if let Some(popup) = self.popup.as_mut()
+            && popup.max_scroll() > 0.0
+            && popup
+                .menu_rect()
+                .contains(winisland_render::Point::new(mouse_x, mouse_y))
+        {
+            if popup.scroll_by(-scroll_delta(delta)) {
+                self.update_popup_hover();
+                self.request_redraw();
+            }
+            return;
+        }
         if self.popup.is_some() {
             self.popup = None;
             self.pending_plugin_setting = None;
@@ -1063,7 +1122,6 @@ impl SettingsApp {
             return;
         }
         let delta = scroll_delta(delta);
-        let (mouse_x, _) = self.logical_mouse_pos;
         if self.active_page == PLUGINS_PAGE_INDEX && self.plugin_detail_contains(mouse_x) {
             self.plugin_detail_scroll =
                 (self.plugin_detail_scroll - delta).clamp(0.0, self.plugin_detail_max_scroll);
@@ -1078,6 +1136,12 @@ impl SettingsApp {
 
     fn handle_left_mouse_pressed(&mut self) {
         let (mouse_x, mouse_y) = self.logical_mouse_pos;
+        if let Some(popup) = self.popup.as_mut()
+            && popup.begin_scroll_drag(mouse_x, mouse_y)
+        {
+            self.request_redraw();
+            return;
+        }
         if self.resource_editor_open {
             self.handle_click();
             return;
@@ -1114,7 +1178,11 @@ impl SettingsApp {
         if self.resource_editor_open {
             return false;
         }
-        let in_sidebar_title = mouse_x < SIDEBAR_W && mouse_y < SIDEBAR_TITLE_HEIGHT;
+        let in_sidebar_title = mouse_x < SIDEBAR_W
+            && mouse_y < SIDEBAR_TITLE_HEIGHT
+            && !self
+                .search_rect()
+                .contains(winisland_render::Point::new(mouse_x, mouse_y));
         let in_content_title = mouse_x >= SIDEBAR_W
             && mouse_y < SETTINGS_HEADER_H
             && Self::page_navigation_at(mouse_x, mouse_y).is_none()
@@ -1123,6 +1191,10 @@ impl SettingsApp {
     }
 
     fn handle_left_mouse_released(&mut self) {
+        if self.popup.as_mut().is_some_and(PopupState::end_scroll_drag) {
+            self.request_redraw();
+            return;
+        }
         if std::mem::take(&mut self.music_notice_pressed) {
             if self.music_notice_button_hovered() {
                 self.config.music_notice_acknowledged = true;
@@ -1204,7 +1276,8 @@ impl SettingsApp {
         let has_popup = self.popup.is_some();
         let is_scrolling = (self.target_scroll_y - self.scroll_y).abs() > 0.1;
         let is_widget_dragging = self.widget_drag_active();
-        let is_number_input_active = self.number_input.is_some();
+        let is_number_input_active =
+            self.number_input.is_some() || self.search.focused || self.search.flash_active();
 
         if !settings_frame_should_continue(
             has_anim,

@@ -262,6 +262,41 @@ impl App {
         }
     }
 
+    fn handle_music_wheel(
+        &mut self,
+        delta: MouseWheelDelta,
+        rel_x: i32,
+        rel_y: i32,
+        layout: &IslandLayout,
+    ) -> bool {
+        use crate::ui::expanded::music_view::{self, AudioPanel};
+        let (ox, oy) = (layout.offset_x as f32, layout.island_y as f32);
+        let (w, scale) = (self.springs.w.value, self.config.expanded_scale);
+        let point = Point::new(
+            rel_x as f32 - self.page_translation(ExpandedPage::Music),
+            rel_y as f32,
+        );
+        let notches = match delta {
+            MouseWheelDelta::Lines { y, .. } => y,
+            MouseWheelDelta::Pixels { y, .. } => y as f32 / 40.0,
+        };
+        let panel = music_view::audio_panel();
+        if panel == AudioPanel::Outputs
+            && music_view::output_list_rect(ox, oy, w, scale).contains(point)
+        {
+            music_view::scroll_output_list(ox, oy, w, scale, notches * 32.0 * scale);
+            return true;
+        }
+        let over_volume = music_view::volume_button_rect(ox, oy, w, scale).contains(point)
+            || (panel == AudioPanel::Volume
+                && music_view::volume_bar_rect(ox, oy, w, scale).contains(point));
+        if over_volume && let Some(level) = music_view::step_volume(notches) {
+            self.compact_overlay.set_volume_level(level);
+            return true;
+        }
+        false
+    }
+
     pub(super) fn handle_mouse_wheel(&mut self, delta: MouseWheelDelta, px: i32, py: i32) -> bool {
         if !self.expanded {
             return false;
@@ -280,6 +315,12 @@ impl App {
         );
         if !over_island && !self.pager_contains(rel_x, rel_y, &layout) {
             return false;
+        }
+        if over_island
+            && self.page_focused(ExpandedPage::Music)
+            && self.handle_music_wheel(delta, rel_x, rel_y, &layout)
+        {
+            return true;
         }
         let dominant = |x: f32, y: f32| if x.abs() > y.abs() { x } else { -y };
         let timer_target = self

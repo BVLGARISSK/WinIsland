@@ -44,6 +44,15 @@ impl ActivityManager {
             .max_by_key(|item| (item.priority, item.updated_at, item.id))
     }
 
+    /// Returns the activity `current` would pick if `id` were absent.
+    pub fn current_excluding(&self, id: u64) -> Option<&Activity> {
+        let now = Instant::now();
+        self.activities
+            .iter()
+            .filter(|item| item.id != id && item.visible_at(now))
+            .max_by_key(|item| (item.priority, item.updated_at, item.id))
+    }
+
     pub fn keeps_visible(&self) -> bool {
         let now = Instant::now();
         self.activities

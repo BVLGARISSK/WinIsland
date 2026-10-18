@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use winisland_core::i18n::tr;
 use winisland_render::text::FontManager;
-use winisland_render::{Painter, Point, Radius, Rect, Rgba, StrokeCap, Vec2};
+use winisland_render::{FontWeight, Painter, Point, Radius, Rect, Rgba, StrokeCap, Vec2};
 
 use crate::ui::compact::CompactSize;
 
@@ -66,16 +66,16 @@ fn ease_out_cubic(value: f32) -> f32 {
     1.0 - (1.0 - value).powi(3)
 }
 
-fn truncated(text: &str, size: f32, bold: bool, max_width: f32) -> String {
+fn truncated(text: &str, size: f32, weight: FontWeight, max_width: f32) -> String {
     let fonts = FontManager::global();
-    if fonts.measure_str(text, size, bold).width() <= max_width {
+    if fonts.measure_str(text, size, weight).width() <= max_width {
         return text.to_string();
     }
     let mut chars: Vec<char> = text.chars().collect();
     while !chars.is_empty() {
         chars.pop();
         let candidate = chars.iter().collect::<String>() + "…";
-        if fonts.measure_str(&candidate, size, bold).width() <= max_width {
+        if fonts.measure_str(&candidate, size, weight).width() <= max_width {
             return candidate;
         }
     }
@@ -87,16 +87,16 @@ fn draw_text(
     text: &str,
     origin: Point,
     size: f32,
-    bold: bool,
+    weight: FontWeight,
     color: Rgba,
 ) -> f32 {
-    let bounds = FontManager::global().measure_str(text, size, bold);
+    let bounds = FontManager::global().measure_str(text, size, weight);
     FontManager::global().draw_str(
         painter,
         text,
         Point::new(origin.x - bounds.left, origin.y),
         size,
-        bold,
+        weight,
         color,
     );
     bounds.width()
@@ -249,22 +249,27 @@ impl LinkIndicator {
         let button = Self::button_rect(rect, scale);
         let text_left = icon_center.x + icon_radius + 12.0 * scale;
         let text_width = (button.left - 12.0 * scale - text_left).max(0.0);
-        let title = truncated(&tr("link_prompt_title"), 11.0 * scale, false, text_width);
+        let title = truncated(
+            &tr("link_prompt_title"),
+            11.0 * scale,
+            FontWeight::REGULAR,
+            text_width,
+        );
         draw_text(
             painter,
             &title,
             Point::new(text_left, rect.center_y() - 4.0 * scale),
             11.0 * scale,
-            false,
+            FontWeight::REGULAR,
             Rgba::WHITE.with_alpha_f(0.65 * opacity),
         );
-        let host = truncated(&self.host, 14.0 * scale, true, text_width);
+        let host = truncated(&self.host, 14.0 * scale, FontWeight::SEMIBOLD, text_width);
         draw_text(
             painter,
             &host,
             Point::new(text_left, rect.center_y() + 13.0 * scale),
             14.0 * scale,
-            true,
+            FontWeight::SEMIBOLD,
             Rgba::WHITE.with_alpha_f(opacity),
         );
 
@@ -275,7 +280,8 @@ impl LinkIndicator {
         );
         let label = tr("link_prompt_open");
         let label_size = 12.0 * scale;
-        let label_bounds = FontManager::global().measure_str(&label, label_size, true);
+        let label_bounds =
+            FontManager::global().measure_str(&label, label_size, FontWeight::SEMIBOLD);
         FontManager::global().draw_str(
             painter,
             &label,
@@ -284,7 +290,7 @@ impl LinkIndicator {
                 button.center_y() - label_bounds.height() / 2.0 - label_bounds.top,
             ),
             label_size,
-            true,
+            FontWeight::SEMIBOLD,
             Rgba::WHITE.with_alpha_f(opacity),
         );
         painter.restore();

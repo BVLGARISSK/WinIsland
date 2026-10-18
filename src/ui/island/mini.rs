@@ -9,8 +9,11 @@ use winisland_core::lyrics::LyricHighlight;
 use winisland_plugin_host::draw::replay::PreparedFrame;
 use winisland_plugin_host::host::PluginHost;
 use winisland_render::text::{DrawTextCachedParams, FontManager};
-use winisland_render::{BlurSpec, Image, ImageOptions, Painter, Radius, Rect, Rgba, Sampling};
+use winisland_render::{
+    BlurSpec, FontWeight, Image, ImageOptions, Painter, Radius, Rect, Rgba, Sampling,
+};
 
+pub(crate) const LYRIC_WEIGHT: FontWeight = FontWeight::MEDIUM;
 const PENDING_LYRIC_CHANNEL: u8 = 190;
 const SECONDARY_LYRIC_SCALE: f32 = 0.85;
 const LYRIC_PAIR_GAP_SCALE: f32 = 0.18;
@@ -352,13 +355,8 @@ fn lyric_style(color: Rgba, alpha: u8, blur_sigma: f32) -> (Rgba, Option<BlurSpe
 /// Plugin content is centred in the compact island, matching the default
 /// alignment of the built-in compact widgets. A line wider than the island keeps
 /// the left inset so its leading characters stay readable.
-fn plugin_text_x(text: &str, size: f32, bold: bool, text_x: f32, text_width: f32) -> f32 {
-    let style = if bold {
-        winisland_render::FontStyle::bold()
-    } else {
-        winisland_render::FontStyle::normal()
-    };
-    let measured = FontManager::global().measure_text_cached(text, size, style);
+fn plugin_text_x(text: &str, size: f32, weight: FontWeight, text_x: f32, text_width: f32) -> f32 {
+    let measured = FontManager::global().measure_text_cached(text, size, weight);
     text_x + ((text_width - measured) * 0.5).max(0.0)
 }
 
@@ -389,10 +387,10 @@ fn draw_plugin_content(params: &MiniContentParams<'_>, context: &ActivityText, a
     draw_text_cached(DrawTextCachedParams {
         painter: params.painter,
         text,
-        x: plugin_text_x(text, font_size, true, text_x, text_width),
+        x: plugin_text_x(text, font_size, FontWeight::SEMIBOLD, text_x, text_width),
         y: text_y,
         size: font_size,
-        bold: true,
+        weight: FontWeight::SEMIBOLD,
         color,
         blur,
     });
@@ -408,13 +406,13 @@ fn draw_plugin_content(params: &MiniContentParams<'_>, context: &ActivityText, a
             x: plugin_text_x(
                 &context.body,
                 font_size * PLUGIN_SECONDARY_FONT_SCALE,
-                false,
+                FontWeight::REGULAR,
                 text_x,
                 text_width,
             ),
             y: text_y + font_size * PLUGIN_SECONDARY_LINE_SPACING,
             size: font_size * PLUGIN_SECONDARY_FONT_SCALE,
-            bold: false,
+            weight: FontWeight::REGULAR,
             color: secondary_color,
             blur: secondary_blur,
         });
@@ -468,13 +466,9 @@ fn draw_lyric_pair(params: LyricPairParams<'_>) {
     } else {
         center_y + secondary_size / 3.0
     };
-    let text_x = |text: &str, text_size: f32, anchor_x: f32, centered: bool| {
+    let text_x = |text: &str, text_size: f32, weight: FontWeight, anchor_x: f32, centered: bool| {
         if centered {
-            let width = FontManager::global().measure_text_cached(
-                text,
-                text_size,
-                winisland_render::FontStyle::normal(),
-            );
+            let width = FontManager::global().measure_text_cached(text, text_size, weight);
             anchor_x - width / 2.0
         } else {
             anchor_x
@@ -485,7 +479,13 @@ fn draw_lyric_pair(params: LyricPairParams<'_>) {
         draw_highlighted_lyric(
             painter,
             primary,
-            text_x(primary, size, primary_anchor_x, primary_centered),
+            text_x(
+                primary,
+                size,
+                LYRIC_WEIGHT,
+                primary_anchor_x,
+                primary_centered,
+            ),
             primary_y,
             size,
             color,
@@ -503,10 +503,16 @@ fn draw_lyric_pair(params: LyricPairParams<'_>) {
         draw_text_cached(DrawTextCachedParams {
             painter,
             text: secondary,
-            x: text_x(secondary, secondary_size, secondary_center_x, true),
+            x: text_x(
+                secondary,
+                secondary_size,
+                FontWeight::REGULAR,
+                secondary_center_x,
+                true,
+            ),
             y: secondary_y,
             size: secondary_size,
-            bold: false,
+            weight: FontWeight::REGULAR,
             color: secondary_color,
             blur,
         });
@@ -531,7 +537,7 @@ fn draw_highlighted_lyric(
             x,
             y,
             size,
-            bold: false,
+            weight: LYRIC_WEIGHT,
             color,
             blur,
         });
@@ -554,7 +560,7 @@ fn draw_highlighted_lyric(
     ));
 
     let font_manager = FontManager::global();
-    let style = winisland_render::FontStyle::normal();
+    let style = LYRIC_WEIGHT;
     let (completed_width, active_width) = font_manager.measure_text_prefixes_cached(
         text,
         highlight.start_byte,
