@@ -110,6 +110,9 @@ pub trait WindowSystem {
     /// Sets the cursor icon; a missing window is ignored.
     fn set_cursor(&self, id: WindowId, cursor: CursorKind);
     fn set_plugin_input(&self, id: WindowId, capture: bool, keyboard: bool);
+    /// Enables IME text entry with candidates placed at `area` in client physical pixels, or
+    /// disables it with `None`; a missing window is ignored.
+    fn set_text_input(&self, id: WindowId, area: Option<crate::Rect>);
     /// Applies the titlebar theme; unsupported or missing windows are ignored.
     fn set_titlebar_theme(&self, id: WindowId, is_light: bool);
     /// Starts composition backdrop for a live overlay; unavailable support returns an error.
@@ -127,9 +130,9 @@ pub trait WindowSystem {
     /// Starts composition backdrop beneath a settings window's own content; disabled transparency
     /// or unavailable support returns an error.
     fn start_window_backdrop(&self, id: WindowId) -> Result<(), PlatformError>;
-    /// Shapes the window backdrop from the client origin in physical pixels; false means absent,
-    /// and an update error releases it.
-    fn update_window_backdrop(&self, id: WindowId, width: f32, height: f32, radius: f32) -> bool;
+    /// Shapes the window backdrop as a rounded rectangle in client physical pixels; false means
+    /// absent, and an update error releases it.
+    fn update_window_backdrop(&self, id: WindowId, rect: [f32; 4], radius: f32) -> bool;
     /// Starts screen sampling beneath an overlay on the adapter with `adapter_luid`, excluding the
     /// overlay from all screen captures until stopped; unavailable support returns an error.
     fn start_backdrop_capture(

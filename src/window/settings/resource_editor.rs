@@ -14,7 +14,9 @@ use winisland_core::config::{
 };
 use winisland_core::i18n::tr;
 use winisland_render::text::{DrawTextCachedParams, FontManager};
-use winisland_render::{FontStyle, Painter, Path, Point, Radius, Rect, Rgba, StrokeCap, Vec2};
+use winisland_render::{
+    FontStyle, FontWeight, Painter, Path, Point, Radius, Rect, Rgba, StrokeCap, Vec2,
+};
 
 use super::page_order::draw_checkbox;
 use super::{PopupState, SettingsApp};
@@ -1284,6 +1286,14 @@ fn rgb(value: u32) -> Rgba {
     Rgba::from_rgb((value >> 16) as u8, (value >> 8) as u8, value as u8)
 }
 
+fn text_weight(bold: bool) -> FontWeight {
+    if bold {
+        FontWeight::SEMIBOLD
+    } else {
+        FontWeight::REGULAR
+    }
+}
+
 fn draw_text(painter: Painter<'_>, text: &str, x: f32, y: f32, size: f32, bold: bool, color: Rgba) {
     FontManager::global().draw_text_cached(DrawTextCachedParams {
         painter,
@@ -1291,7 +1301,7 @@ fn draw_text(painter: Painter<'_>, text: &str, x: f32, y: f32, size: f32, bold: 
         x,
         y,
         size,
-        bold,
+        weight: text_weight(bold),
         color,
         blur: None,
     });
@@ -1305,15 +1315,7 @@ fn draw_centered_text(
     bold: bool,
     color: Rgba,
 ) {
-    let width = FontManager::global().measure_text_cached(
-        text,
-        size,
-        if bold {
-            FontStyle::bold()
-        } else {
-            FontStyle::normal()
-        },
-    );
+    let width = FontManager::global().measure_text_cached(text, size, text_weight(bold));
     draw_text(
         painter,
         text,

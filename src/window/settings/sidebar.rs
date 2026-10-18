@@ -1,36 +1,46 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use winisland_render::FontStyle;
-use winisland_render::{
-    Image, ImageOptions, Mipmapped, Painter, Point, Radius, Rect, Rgba, Sampling, StrokeCap,
-};
+use winisland_render::FontWeight;
+use winisland_render::{Image, Mipmapped, Painter, Point, Rect, Rgba};
 
 use crate::utils::color::SettingsTheme;
-use crate::utils::settings_ui::items::{SIDEBAR_PAD, SIDEBAR_SEL_RADIUS};
-use crate::utils::settings_ui::{SettingsPainter, ellipsize_text, settings_color};
+use crate::utils::settings_ui::chrome::{
+    SidebarRow, draw_search_field, draw_sidebar_row, draw_traffic_lights, search_rect,
+};
+use crate::utils::settings_ui::items::SIDEBAR_PAD;
+use crate::utils::settings_ui::text_baseline;
 use winisland_core::i18n::tr;
 use winisland_render::DrawingContext;
 use winisland_render::text::FontManager;
 
 use super::{
-    SIDEBAR_KEY_BASE, SIDEBAR_ROW_GAP, SIDEBAR_ROW_H, SIDEBAR_START_Y, SIDEBAR_W, SettingsApp,
-    WINDOW_CONTROL_CENTERS, WINDOW_CONTROL_RADIUS,
+    BUILTIN_SIDEBAR_PAGE_COUNT, BuiltinPage, SIDEBAR_KEY_BASE, SIDEBAR_ROW_GAP, SIDEBAR_ROW_H,
+    SIDEBAR_START_Y, SIDEBAR_W, SettingsApp,
 };
 
-const SIDEBAR_ICON_BYTES: [&[u8]; 5] = [
+const SIDEBAR_GROUP_GAP: f32 = 12.0;
+const SIDEBAR_ICON_BYTES: [&[u8]; BUILTIN_SIDEBAR_PAGE_COUNT] = [
     include_bytes!("../../../resources/in_app/settings/settings.png"),
+    include_bytes!("../../../resources/in_app/settings/appearance.png"),
+    include_bytes!("../../../resources/in_app/settings/layout.png"),
+    include_bytes!("../../../resources/in_app/settings/behavior.png"),
+    include_bytes!("../../../resources/in_app/settings/alerts.png"),
     include_bytes!("../../../resources/in_app/settings/music.png"),
     include_bytes!("../../../resources/in_app/settings/widget.png"),
     include_bytes!("../../../resources/in_app/settings/plugin.png"),
     include_bytes!("../../../resources/in_app/settings/about.png"),
 ];
 
-const SIDEBAR_BLUR_TINT_LIGHT: f32 = 0.8;
-const SIDEBAR_BLUR_TINT_DARK: f32 = 0.72;
-
 thread_local! {
-    static SIDEBAR_ICONS: RefCell<Option<[Image; 5]>> = const { RefCell::new(None) };
+    static SIDEBAR_ICONS: RefCell<Option<Vec<Image>>> = const { RefCell::new(None) };
     static PLUGIN_SETTINGS_ICONS: RefCell<HashMap<u64, Image>> = RefCell::new(HashMap::new());
+    static SEARCH_GLYPH: RefCell<Option<Option<Image>>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SidebarEntry {
+    Page(usize),
+    Result(usize),
 }
 
 fn load_sidebar_icon(drawing_context: &mut DrawingContext<'_>, bytes: &[u8]) -> Image {
@@ -40,27 +50,32 @@ fn load_sidebar_icon(drawing_context: &mut DrawingContext<'_>, bytes: &[u8]) -> 
         .expect("Failed to create mipmapped sidebar icon texture")
 }
 
-fn draw_sidebar_icon(
-    drawing_context: &mut DrawingContext<'_>,
-    painter: Painter<'_>,
-    index: usize,
-    rect: Rect,
-) {
+fn sidebar_icon(drawing_context: &mut DrawingContext<'_>, index: usize) -> Option<Image> {
     SIDEBAR_ICONS.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.is_none() {
-            *cache =
-                Some(SIDEBAR_ICON_BYTES.map(|bytes| load_sidebar_icon(drawing_context, bytes)));
-        }
-        let icons = cache.as_ref().expect("Sidebar icon cache was initialized");
-        painter.draw_image(
-            &icons[index],
-            rect,
-            &ImageOptions::default()
-                .with_sampling(Sampling::LinearLinear)
-                .with_anti_alias(false),
-        );
-    });
+        let icons = cache.get_or_insert_with(|| {
+            SIDEBAR_ICON_BYTES
+                .iter()
+                .map(|bytes| load_sidebar_icon(drawing_context, bytes))
+                .collect()
+        });
+        icons.get(index).cloned()
+    })
+}
+
+fn search_glyph() -> Option<Image> {
+    SEARCH_GLYPH.with(|cache| {
+        cache
+            .borrow_mut()
+            .get_or_insert_with(|| {
+                crate::icons::load_tinted_glyph(
+                    include_bytes!("../../../resources/in_app/icons/magnifyingglass.png"),
+                    Rgba::from_rgb(128, 128, 134),
+                )
+                .map(|(image, _)| image)
+            })
+            .clone()
+    })
 }
 
 pub(super) fn clear_sidebar_icon_cache() {
@@ -73,248 +88,175 @@ pub(super) fn clear_plugin_settings_icon_cache() {
     PLUGIN_SETTINGS_ICONS.with(|cache| cache.borrow_mut().clear());
 }
 
-fn draw_plugin_settings_icon(
+fn plugin_settings_icon(
     drawing_context: &mut DrawingContext<'_>,
-    painter: Painter<'_>,
     page: &winisland_core::plugin_settings::PluginSettingsPage,
-    rect: Rect,
-) {
+) -> Option<Image> {
     if page.icon.is_empty() {
-        draw_sidebar_icon(drawing_context, painter, 3, rect);
-        return;
+        return sidebar_icon(drawing_context, BuiltinPage::Plugins as usize);
     }
-    let image = PLUGIN_SETTINGS_ICONS.with(|cache| {
-        if let Some(image) = cache.borrow().get(&page.resource_id) {
-            return Some(image.clone());
-        }
-        let image = Image::from_encoded(&page.icon)?;
-        let image = drawing_context.prepare_image(image, Mipmapped::Yes)?;
-        cache.borrow_mut().insert(page.resource_id, image.clone());
-        Some(image)
-    });
-    if let Some(image) = image {
-        painter.draw_image(
-            &image,
-            rect,
-            &ImageOptions::default()
-                .with_sampling(Sampling::LinearLinear)
-                .with_anti_alias(false),
-        );
-    } else {
-        draw_sidebar_icon(drawing_context, painter, 3, rect);
-    }
-}
-
-fn draw_sidebar_row_background(
-    app: &SettingsApp,
-    painter: Painter<'_>,
-    theme: &SettingsTheme,
-    index: usize,
-) -> Rgba {
-    let row_y = SIDEBAR_START_Y + index as f32 * (SIDEBAR_ROW_H + SIDEBAR_ROW_GAP);
-    let row_x = SIDEBAR_PAD;
-    let row_w = SIDEBAR_W - SIDEBAR_PAD * 2.0;
-    if app.active_page == index {
-        painter.fill_round_rect(
-            winisland_render::Rect::from_xywh(row_x, row_y, row_w, SIDEBAR_ROW_H),
-            Radius::uniform(SIDEBAR_SEL_RADIUS),
-            settings_color(if app.focused {
-                theme.selection_bg
-            } else {
-                theme.card_highlight
-            }),
-        );
-        if app.focused {
-            if app.is_light {
-                settings_color(theme.selection_text)
-            } else {
-                Rgba::WHITE
+    PLUGIN_SETTINGS_ICONS
+        .with(|cache| {
+            if let Some(image) = cache.borrow().get(&page.resource_id) {
+                return Some(image.clone());
             }
-        } else {
-            settings_color(theme.text_pri)
-        }
-    } else {
-        let hover = app.anim.get(SIDEBAR_KEY_BASE + index as u64);
-        if hover > 0.005 {
-            let base = theme.sidebar_hover;
-            painter.fill_round_rect(
-                winisland_render::Rect::from_xywh(row_x, row_y, row_w, SIDEBAR_ROW_H),
-                Radius::uniform(SIDEBAR_SEL_RADIUS),
-                Rgba::from_argb(
-                    (base.a() as f32 * hover) as u8,
-                    base.r(),
-                    base.g(),
-                    base.b(),
-                ),
-            );
-        }
-        settings_color(if app.sidebar_hover == index as i32 {
-            theme.text_pri
-        } else {
-            theme.text_sec
+            let image = Image::from_encoded(&page.icon)?;
+            let image = drawing_context.prepare_image(image, Mipmapped::Yes)?;
+            cache.borrow_mut().insert(page.resource_id, image.clone());
+            Some(image)
         })
-    }
-}
-
-fn draw_window_control(
-    painter: Painter<'_>,
-    center: (f32, f32),
-    fill: Rgba,
-    border: Rgba,
-    highlighted: bool,
-) {
-    painter.fill_circle(
-        Point::new(center.0, center.1 + 0.75),
-        WINDOW_CONTROL_RADIUS + 0.25,
-        Rgba::from_argb(38, 0, 0, 0),
-    );
-
-    painter.fill_circle(Point::new(center.0, center.1), WINDOW_CONTROL_RADIUS, fill);
-
-    painter.stroke_circle(
-        Point::new(center.0, center.1),
-        WINDOW_CONTROL_RADIUS - 0.375,
-        0.75,
-        border,
-    );
-
-    if highlighted {
-        painter.fill_oval(
-            winisland_render::Rect::from_xywh(center.0 - 3.5, center.1 - 4.25, 7.0, 2.25),
-            Rgba::from_argb(36, 255, 255, 255),
-        );
-    }
+        .or_else(|| sidebar_icon(drawing_context, BuiltinPage::Plugins as usize))
 }
 
 impl SettingsApp {
+    pub(crate) fn search_rect(&self) -> Rect {
+        search_rect(SIDEBAR_W, SIDEBAR_PAD)
+    }
+
+    /// Lays out the sidebar: grouped pages normally, or search results while searching.
+    pub(crate) fn sidebar_rows(&self) -> Vec<(SidebarEntry, Rect)> {
+        let row =
+            |y: f32| Rect::from_xywh(SIDEBAR_PAD, y, SIDEBAR_W - SIDEBAR_PAD * 2.0, SIDEBAR_ROW_H);
+        let pitch = SIDEBAR_ROW_H + SIDEBAR_ROW_GAP;
+        let mut y = SIDEBAR_START_Y;
+        let mut rows = Vec::new();
+        if self.search.active() {
+            for index in 0..self.search.results.len() {
+                rows.push((SidebarEntry::Result(index), row(y)));
+                y += pitch;
+            }
+            return rows;
+        }
+        let plugin_pages: Vec<usize> = (0..self.plugin_settings_pages.len())
+            .map(|offset| BUILTIN_SIDEBAR_PAGE_COUNT + offset)
+            .collect();
+        let groups: [&[usize]; 4] = [
+            &[
+                BuiltinPage::General as usize,
+                BuiltinPage::Appearance as usize,
+                BuiltinPage::Layout as usize,
+                BuiltinPage::Behavior as usize,
+                BuiltinPage::Alerts as usize,
+            ],
+            &[
+                BuiltinPage::Music as usize,
+                BuiltinPage::Widgets as usize,
+                BuiltinPage::Plugins as usize,
+            ],
+            &plugin_pages,
+            &[BuiltinPage::About as usize],
+        ];
+        for group in groups.iter().filter(|group| !group.is_empty()) {
+            for page in group.iter() {
+                rows.push((SidebarEntry::Page(*page), row(y)));
+                y += pitch;
+            }
+            y += SIDEBAR_GROUP_GAP;
+        }
+        rows
+    }
+
+    pub(crate) fn sidebar_entry_at(&self, x: f32, y: f32) -> Option<SidebarEntry> {
+        let point = Point::new(x, y);
+        self.sidebar_rows()
+            .into_iter()
+            .find(|(_, rect)| rect.contains(point))
+            .map(|(entry, _)| entry)
+    }
+
+    fn sidebar_entry_icon(
+        &self,
+        drawing_context: &mut DrawingContext<'_>,
+        page: usize,
+    ) -> Option<Image> {
+        if page < BUILTIN_SIDEBAR_PAGE_COUNT {
+            sidebar_icon(drawing_context, page)
+        } else {
+            self.plugin_settings_pages
+                .get(page - BUILTIN_SIDEBAR_PAGE_COUNT)
+                .and_then(|plugin_page| plugin_settings_icon(drawing_context, plugin_page))
+        }
+    }
+
+    fn sidebar_page_label(&self, page: usize) -> String {
+        match BuiltinPage::from_index(page) {
+            Some(page) => tr(page.title_key()),
+            None => self
+                .plugin_settings_pages
+                .get(page - BUILTIN_SIDEBAR_PAGE_COUNT)
+                .map(|page| page.title.clone())
+                .unwrap_or_default(),
+        }
+    }
+
     pub(crate) fn draw_sidebar(
         &self,
         drawing_context: &mut DrawingContext<'_>,
         painter: Painter<'_>,
         theme: &SettingsTheme,
     ) {
-        let logical_height = self.logical_window_size().1;
-        let sidebar_bg = settings_color(theme.sidebar_bg);
-        painter.fill_rect(
-            winisland_render::Rect::from_xywh(0.0, 0.0, SIDEBAR_W, logical_height),
-            if self.window_backdrop {
-                sidebar_bg.with_alpha_f(if self.is_light {
-                    SIDEBAR_BLUR_TINT_LIGHT
-                } else {
-                    SIDEBAR_BLUR_TINT_DARK
-                })
-            } else {
-                sidebar_bg
-            },
+        draw_traffic_lights(
+            painter,
+            self.is_light,
+            self.focused,
+            self.dots_hovered,
+            theme.text_sec,
+        );
+        draw_search_field(
+            painter,
+            theme,
+            self.search_rect(),
+            search_glyph().as_ref(),
+            &self.search.query,
+            &self.search.composition,
+            self.search.focused,
+            self.search.focused && self.frame_count % 60 < 30,
         );
 
-        let inactive_fill = if self.is_light {
-            Rgba::from_rgb(184, 184, 188)
-        } else {
-            Rgba::from_rgb(82, 82, 86)
-        };
-        let fills = if self.focused {
-            [
-                Rgba::from_rgb(255, 95, 87),
-                Rgba::from_rgb(254, 188, 46),
-                Rgba::from_rgb(126, 126, 132),
-            ]
-        } else {
-            [inactive_fill; 3]
-        };
-        let border = if self.is_light {
-            Rgba::from_argb(38, 0, 0, 0)
-        } else {
-            Rgba::from_argb(64, 0, 0, 0)
-        };
-
-        for (center, fill) in WINDOW_CONTROL_CENTERS.into_iter().zip(fills) {
-            draw_window_control(painter, center, fill, border, self.focused);
-        }
-
-        if self.dots_hovered {
-            let close_color = if self.focused {
-                Rgba::from_rgb(78, 0, 2)
-            } else {
-                settings_color(theme.text_sec)
+        let rows = self.sidebar_rows();
+        for (position, (entry, rect)) in rows.iter().enumerate() {
+            let (page, label, selected) = match *entry {
+                SidebarEntry::Page(page) => (
+                    page,
+                    self.sidebar_page_label(page),
+                    self.active_page == page,
+                ),
+                SidebarEntry::Result(index) => {
+                    let result = &self.search.results[index];
+                    (result.page, result.label.clone(), false)
+                }
             };
-            painter.stroke_line(
-                Point::new(17.5, 17.5),
-                Point::new(22.5, 22.5),
-                1.1,
-                close_color,
-                StrokeCap::Round,
-            );
-            painter.stroke_line(
-                Point::new(22.5, 17.5),
-                Point::new(17.5, 22.5),
-                1.1,
-                close_color,
-                StrokeCap::Round,
-            );
-
-            let minimize_color = if self.focused {
-                Rgba::from_rgb(92, 62, 0)
-            } else {
-                settings_color(theme.text_sec)
-            };
-            painter.stroke_line(
-                Point::new(36.5, 20.0),
-                Point::new(43.5, 20.0),
-                1.1,
-                minimize_color,
-                StrokeCap::Round,
+            let icon = self.sidebar_entry_icon(drawing_context, page);
+            draw_sidebar_row(
+                painter,
+                theme,
+                SidebarRow {
+                    rect: *rect,
+                    icon: icon.as_ref(),
+                    label: &label,
+                    selected,
+                    focused: self.focused,
+                    hover: self.anim.get(SIDEBAR_KEY_BASE + position as u64),
+                },
             );
         }
-
-        painter.stroke_line(
-            Point::new(SIDEBAR_W, 0.0),
-            Point::new(SIDEBAR_W, logical_height),
-            0.5,
-            settings_color(theme.separator),
-            StrokeCap::Butt,
-        );
-
-        let pages = [
-            tr("tab_general"),
-            tr("tab_music"),
-            tr("tab_widgets"),
-            tr("tab_plugins"),
-            tr("tab_about"),
-        ];
-        for (index, label) in pages.iter().enumerate() {
-            let row_y = SIDEBAR_START_Y + index as f32 * (SIDEBAR_ROW_H + SIDEBAR_ROW_GAP);
-            let text_color = draw_sidebar_row_background(self, painter, theme, index);
-            let icon_rect = Rect::from_xywh(SIDEBAR_PAD + 7.0, row_y + 6.0, 22.0, 22.0);
-            draw_sidebar_icon(drawing_context, painter, index, icon_rect);
-            SettingsPainter::new(painter).text(
-                label,
-                (SIDEBAR_PAD + 36.0, row_y + 22.0),
+        if self.search.active() && rows.is_empty() {
+            let text = tr("search_no_results");
+            let width = FontManager::global().measure_text_cached(
+                &text,
                 13.0,
-                self.active_page == index,
-                text_color,
+                winisland_render::FontStyle::normal(),
             );
-        }
-
-        for (offset, page) in self.plugin_settings_pages.iter().enumerate() {
-            let index = super::BUILTIN_SIDEBAR_PAGE_COUNT + offset;
-            let row_y = SIDEBAR_START_Y + index as f32 * (SIDEBAR_ROW_H + SIDEBAR_ROW_GAP);
-            let text_color = draw_sidebar_row_background(self, painter, theme, index);
-            let icon_rect = Rect::from_xywh(SIDEBAR_PAD + 7.0, row_y + 6.0, 22.0, 22.0);
-            draw_plugin_settings_icon(drawing_context, painter, page, icon_rect);
-            let label = ellipsize_text(
-                FontManager::global(),
-                &page.title,
+            FontManager::global().draw_str(
+                painter,
+                &text,
+                Point::new(
+                    SIDEBAR_W / 2.0 - width / 2.0,
+                    text_baseline(SIDEBAR_START_Y + 20.0, 13.0),
+                ),
                 13.0,
-                FontStyle::normal(),
-                SIDEBAR_W - SIDEBAR_PAD * 2.0 - 40.0,
-            );
-            SettingsPainter::new(painter).text(
-                &label,
-                (SIDEBAR_PAD + 36.0, row_y + 22.0),
-                13.0,
-                self.active_page == index,
-                text_color,
+                FontWeight::REGULAR,
+                theme.text_sec,
             );
         }
     }

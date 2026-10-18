@@ -7,7 +7,7 @@ use winisland_core::config::{
     ResourceMetricConfig, ResourceMetricStyle, default_resource_metrics, resource_widget_span,
 };
 use winisland_render::text::{DrawTextCachedParams, FontManager};
-use winisland_render::{Angle, FontStyle, Painter, Point, Radius, Rect, Rgba, StrokeCap};
+use winisland_render::{Angle, FontWeight, Painter, Point, Radius, Rect, Rgba, StrokeCap};
 
 const CELL_GAP: f32 = 3.0;
 
@@ -149,8 +149,8 @@ fn draw_bar(
         );
     }
     let fonts = FontManager::global();
-    let label_width = fonts.measure_text_cached(label, font_size, FontStyle::bold());
-    let measured_value_width = fonts.measure_text_cached(text, value_size, FontStyle::bold());
+    let label_width = fonts.measure_text_cached(label, font_size, FontWeight::SEMIBOLD);
+    let measured_value_width = fonts.measure_text_cached(text, value_size, FontWeight::SEMIBOLD);
     let available = (right - left - 2.0 * scale).max(1.0);
     let fit = (available / (label_width + measured_value_width).max(1.0)).min(1.0);
     font_size = (font_size * fit).max(3.8 * scale);
@@ -161,18 +161,18 @@ fn draw_bar(
         x: left,
         y: baseline,
         size: font_size,
-        bold: true,
+        weight: FontWeight::SEMIBOLD,
         color: alpha_color(accent, (alpha as f32 * 0.82) as u8),
         blur: None,
     });
-    let value_w = fonts.measure_text_cached(text, value_size, FontStyle::bold());
+    let value_w = fonts.measure_text_cached(text, value_size, FontWeight::SEMIBOLD);
     fonts.draw_text_cached(DrawTextCachedParams {
         painter,
         text,
         x: right - value_w,
         y: baseline,
         size: value_size,
-        bold: true,
+        weight: FontWeight::SEMIBOLD,
         color: alpha_color(text_color, alpha),
         blur: None,
     });
@@ -197,7 +197,7 @@ fn draw_ring(
     let label_gap = 3.0 * scale;
     let mut label_size = (bounds.height() * 0.16).clamp(4.0 * scale, 9.0 * scale);
     let label_space = (bounds.width() - inset * 2.0).max(1.0);
-    let measured_label = fonts.measure_text_cached(label, label_size, FontStyle::bold());
+    let measured_label = fonts.measure_text_cached(label, label_size, FontWeight::SEMIBOLD);
     if measured_label > label_space {
         label_size = (label_size * label_space / measured_label).max(3.5 * scale);
     }
@@ -229,12 +229,12 @@ fn draw_ring(
             StrokeCap::Round,
         );
     }
-    let mut value_size = (diameter * 0.22).clamp(4.0 * scale, 9.0 * scale);
+    let mut value_size = (diameter * 0.26).clamp(4.0 * scale, 10.0 * scale);
     let max_value_width = diameter * 0.78;
-    let mut value_width = fonts.measure_text_cached(text, value_size, FontStyle::bold());
+    let mut value_width = fonts.measure_text_cached(text, value_size, FontWeight::SEMIBOLD);
     if value_width > max_value_width {
         value_size = (value_size * max_value_width / value_width).max(3.2 * scale);
-        value_width = fonts.measure_text_cached(text, value_size, FontStyle::bold());
+        value_width = fonts.measure_text_cached(text, value_size, FontWeight::SEMIBOLD);
     }
     fonts.draw_text_cached(DrawTextCachedParams {
         painter,
@@ -242,18 +242,18 @@ fn draw_ring(
         x: center.x - value_width / 2.0,
         y: center.y + value_size * 0.32,
         size: value_size,
-        bold: true,
+        weight: FontWeight::SEMIBOLD,
         color: alpha_color(text_color, alpha),
         blur: None,
     });
-    let label_width = fonts.measure_text_cached(label, label_size, FontStyle::bold());
+    let label_width = fonts.measure_text_cached(label, label_size, FontWeight::SEMIBOLD);
     fonts.draw_text_cached(DrawTextCachedParams {
         painter,
         text: label,
         x: center.x - label_width / 2.0,
         y: ring.bottom + label_gap + label_size * 0.8,
         size: label_size,
-        bold: true,
+        weight: FontWeight::SEMIBOLD,
         color: alpha_color(accent, (alpha as f32 * 0.84) as u8),
         blur: None,
     });
@@ -280,9 +280,9 @@ fn draw_rates(
     let row_width = |rate: RateUsage<'_>, value_size: f32, unit_size: f32| {
         value_size * 0.8
             + arrow_gap
-            + fonts.measure_text_cached(rate.value, value_size, FontStyle::bold())
+            + fonts.measure_text_cached(rate.value, value_size, FontWeight::SEMIBOLD)
             + unit_gap
-            + fonts.measure_text_cached(rate.unit, unit_size, FontStyle::normal())
+            + fonts.measure_text_cached(rate.unit, unit_size, FontWeight::MEDIUM)
     };
     let widest =
         row_width(upload, value_size, unit_size).max(row_width(download, value_size, unit_size));
@@ -314,18 +314,18 @@ fn draw_rates(
             x: value_x,
             y: baseline,
             size: value_size,
-            bold: true,
+            weight: FontWeight::SEMIBOLD,
             color: alpha_color(text_color, alpha),
             blur: None,
         });
-        let value_w = fonts.measure_text_cached(rate.value, value_size, FontStyle::bold());
+        let value_w = fonts.measure_text_cached(rate.value, value_size, FontWeight::SEMIBOLD);
         fonts.draw_text_cached(DrawTextCachedParams {
             painter,
             text: rate.unit,
             x: value_x + value_w + unit_gap,
             y: baseline,
             size: unit_size,
-            bold: false,
+            weight: FontWeight::MEDIUM,
             color: alpha_color(text_color, (alpha as f32 * 0.58) as u8),
             blur: None,
         });

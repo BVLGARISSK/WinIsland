@@ -11,7 +11,7 @@ use crate::icons::brightness::draw_brightness_icon;
 use crate::icons::volume::draw_volume_icon;
 use crate::ui::compact::{CompactOverlayState, CompactSize};
 use winisland_core::i18n::tr;
-use winisland_render::FontStyle;
+use winisland_render::FontWeight;
 use winisland_render::text::{DrawTextCachedParams, FontManager};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -396,7 +396,7 @@ impl VolumeIndicator {
         let label_width = FontManager::global().measure_text_cached(
             &self.label,
             12.0 * scale,
-            FontStyle::normal(),
+            FontWeight::MEDIUM,
         );
         let left = rect.left + (37.0 + 11.0) * scale + label_width;
         Rect::from_xywh(
@@ -464,7 +464,7 @@ impl VolumeIndicator {
             x: label_x,
             y: center_y + 4.0 * scale,
             size: label_size,
-            bold: false,
+            weight: FontWeight::MEDIUM,
             color: Rgba::WHITE.with_alpha((alpha as f32 * 0.9) as u8),
             blur: None,
         });

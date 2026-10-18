@@ -414,7 +414,7 @@ impl App {
         FontManager::global().measure_text_cached(
             text,
             font_size,
-            winisland_render::FontStyle::normal(),
+            crate::ui::island::MINI_LYRIC_WEIGHT,
         ) / scale
     }
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use skia_safe::{Font, FontStyle as SkFontStyle};
 
-use super::{FONT_MGR, FontManager, get_custom_typeface, text_paint};
+use super::{FONT_MGR, FontManager, text_paint, user_typeface};
 use crate::painter::Painter;
 use crate::types::{Rect, Rgba};
 
@@ -50,7 +50,7 @@ impl FontManager {
         };
         let style = SkFontStyle::new(i32::from(weight).into(), 5.into(), slant);
         let typeface = if family.is_empty() {
-            get_custom_typeface()
+            user_typeface()
         } else {
             None
         }

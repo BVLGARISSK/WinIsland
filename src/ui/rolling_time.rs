@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use winisland_render::text::FontManager;
-use winisland_render::{Painter, Point, Rect, Rgba, Vec2};
+use winisland_render::{FontWeight, Painter, Point, Rect, Rgba, Vec2};
 
 use crate::ui::widget::expanded::draw_widget_text_centered;
 
@@ -52,7 +52,9 @@ impl RollingTime {
     }
 
     pub(crate) fn measure_width(text: &str, size: f32) -> f32 {
-        let digit_width = FontManager::global().measure_str("0", size, true).width();
+        let digit_width = FontManager::global()
+            .measure_str("0", size, FontWeight::SEMIBOLD)
+            .width();
         text.chars()
             .map(|character| character_width(character, size, digit_width))
             .sum()
@@ -130,7 +132,9 @@ impl RollingTime {
             .min(0.1);
         self.last_frame = Some(now);
         self.advance(text, now);
-        let digit_width = FontManager::global().measure_str("0", size, true).width();
+        let digit_width = FontManager::global()
+            .measure_str("0", size, FontWeight::SEMIBOLD)
+            .width();
         let advance = |character| character_width(character, size, digit_width);
         let chars = &self.digits[..self.digit_count];
         let total: f32 = chars.iter().map(|character| advance(*character)).sum();
@@ -180,7 +184,7 @@ impl RollingTime {
                     size,
                 ),
                 size,
-                true,
+                FontWeight::SEMIBOLD,
                 color.with_alpha_f(opacity(color) * (1.0 - amount)),
             );
         }
@@ -195,7 +199,7 @@ impl RollingTime {
                     change.previous.encode_utf8(&mut buffer),
                     cell.offset(Vec2::new(0.0, -travel * amount)),
                     size,
-                    true,
+                    FontWeight::SEMIBOLD,
                     color.with_alpha_f(opacity(color) * (1.0 - amount)),
                 );
                 draw_widget_text_centered(
@@ -203,7 +207,7 @@ impl RollingTime {
                     character.encode_utf8(&mut buffer),
                     cell.offset(Vec2::new(0.0, travel * (1.0 - amount))),
                     size,
-                    true,
+                    FontWeight::SEMIBOLD,
                     color.with_alpha_f(opacity(color) * amount),
                 );
             } else {
@@ -212,7 +216,7 @@ impl RollingTime {
                     character.encode_utf8(&mut buffer),
                     cell,
                     size,
-                    true,
+                    FontWeight::SEMIBOLD,
                     color,
                 );
             }
@@ -227,7 +231,7 @@ fn character_width(character: char, size: f32, digit_width: f32) -> f32 {
         digit_width
     } else {
         FontManager::global()
-            .measure_str(&character.to_string(), size, true)
+            .measure_str(&character.to_string(), size, FontWeight::SEMIBOLD)
             .width()
             .max(size * 0.25)
     }

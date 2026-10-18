@@ -3,25 +3,24 @@ use winisland_render::Rect;
 use winisland_render::Rgba;
 
 pub const CONTENT_PADDING: f32 = 24.0;
-pub const ROW_HEIGHT: f32 = 48.0;
+pub const ROW_HEIGHT: f32 = 40.0;
 pub const GROUP_RADIUS: f32 = 12.0;
 pub const GROUP_INNER_PAD: f32 = 16.0;
-pub const SIDEBAR_PAD: f32 = 8.0;
-pub const SIDEBAR_SEL_RADIUS: f32 = 7.0;
+pub const SIDEBAR_PAD: f32 = 16.0;
 
-pub const TOGGLE_W: f32 = 36.0;
+pub const TOGGLE_W: f32 = 46.0;
 pub const TOGGLE_H: f32 = 20.0;
-pub const TOGGLE_R: f32 = 10.0;
-pub const TOGGLE_KNOB: f32 = 16.0;
+pub const TOGGLE_KNOB_W: f32 = 28.0;
 pub const TOGGLE_INSET: f32 = 2.0;
 
-pub const STEPPER_BTN_SIZE: f32 = 28.0;
-pub const STEPPER_VALUE_W: f32 = 52.0;
-pub const STEPPER_GAP: f32 = 0.0;
+pub const STEPPER_BTN_SIZE: f32 = 24.0;
+pub const STEPPER_VALUE_W: f32 = 58.0;
+pub const STEPPER_GAP: f32 = 6.0;
+pub const STEPPER_ARROW_W: f32 = 18.0;
 
 pub const POPUP_BTN_W: f32 = 112.0;
-pub const POPUP_BTN_H: f32 = 28.0;
-pub const POPUP_BTN_R: f32 = 7.0;
+pub const POPUP_BTN_H: f32 = 24.0;
+pub const POPUP_BTN_R: f32 = 6.0;
 pub const POPUP_ITEM_H: f32 = 32.0;
 pub const POPUP_MENU_R: f32 = 10.0;
 pub const POPUP_MENU_PAD: f32 = 5.0;
@@ -40,6 +39,29 @@ pub fn trailing_control_rect(
         y + (row_height - control_height) / 2.0,
         control_width,
         control_height,
+    )
+}
+
+/// Returns the value field and the increment and decrement halves of a row stepper.
+pub fn stepper_rects(y: f32, row_height: f32, content_width: f32) -> (Rect, Rect, Rect) {
+    let arrows = trailing_control_rect(
+        y,
+        row_height,
+        content_width,
+        STEPPER_ARROW_W,
+        STEPPER_BTN_SIZE,
+    );
+    let value = Rect::from_xywh(
+        arrows.left - STEPPER_GAP - STEPPER_VALUE_W,
+        arrows.top,
+        STEPPER_VALUE_W,
+        STEPPER_BTN_SIZE,
+    );
+    let half = STEPPER_BTN_SIZE / 2.0;
+    (
+        value,
+        Rect::from_xywh(arrows.left, arrows.top, STEPPER_ARROW_W, half),
+        Rect::from_xywh(arrows.left, arrows.top + half, STEPPER_ARROW_W, half),
     )
 }
 
@@ -70,11 +92,6 @@ pub enum SettingsItem {
         label: String,
         on: bool,
         enabled: bool,
-    },
-    RowFontPicker {
-        label: String,
-        btn_label: String,
-        reset_label: Option<String>,
     },
     RowFolderPicker {
         label: String,
@@ -129,7 +146,7 @@ pub enum SettingsItem {
 impl SettingsItem {
     pub fn height(&self) -> f32 {
         match self {
-            SettingsItem::SectionHeader { .. } => 36.0,
+            SettingsItem::SectionHeader { .. } => 34.0,
             SettingsItem::GroupStart => 0.0,
             SettingsItem::GroupEnd => 16.0,
             SettingsItem::CenterLink { .. } => 40.0,
@@ -154,7 +171,6 @@ impl SettingsItem {
             self,
             SettingsItem::RowStepper { .. }
                 | SettingsItem::RowSwitch { .. }
-                | SettingsItem::RowFontPicker { .. }
                 | SettingsItem::RowFolderPicker { .. }
                 | SettingsItem::RowSourceSelect { .. }
                 | SettingsItem::RowButton { .. }

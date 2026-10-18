@@ -1,17 +1,21 @@
 use crate::utils::settings_ui::content_height;
 use crate::utils::settings_ui::items::SettingsItem;
 
-use super::{SETTINGS_HEADER_H, SettingsApp};
+use super::{BuiltinPage, SETTINGS_HEADER_H, SettingsApp};
 
 impl SettingsApp {
     pub(crate) fn build_current_items(&self) -> Vec<SettingsItem> {
-        match self.active_page {
-            0 => self.build_general_items(),
-            1 => self.build_music_items(),
-            2 => self.build_widget_items(),
-            3 => self.build_plugin_items(),
-            4 => self.build_about_items(),
-            _ => self.build_plugin_settings_items(),
+        match BuiltinPage::from_index(self.active_page) {
+            Some(BuiltinPage::General) => self.build_general_page().into_items(),
+            Some(BuiltinPage::Appearance) => self.build_appearance_page().into_items(),
+            Some(BuiltinPage::Layout) => self.build_layout_page().into_items(),
+            Some(BuiltinPage::Behavior) => self.build_behavior_page().into_items(),
+            Some(BuiltinPage::Alerts) => self.build_alerts_page().into_items(),
+            Some(BuiltinPage::Music) => self.build_music_items(),
+            Some(BuiltinPage::Widgets) => self.build_widget_items(),
+            Some(BuiltinPage::Plugins) => self.build_plugin_items(),
+            Some(BuiltinPage::About) => self.build_about_items(),
+            None => self.build_plugin_settings_items(),
         }
     }
 

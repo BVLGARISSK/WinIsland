@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use winisland_core::config::ExpandedPageKind;
 use winisland_core::i18n::tr;
+use winisland_render::FontWeight;
 use winisland_render::text::FontManager;
 use winisland_render::{Painter, Path, Point, Radius, Rect, Rgba, StrokeCap, StrokeJoin};
 
@@ -556,7 +557,7 @@ impl SettingsApp {
 
             let fonts = FontManager::global();
             let name = tr(page_name_key(kind));
-            let name_bounds = fonts.measure_str(&name, 14.0, false);
+            let name_bounds = fonts.measure_str(&name, 14.0, FontWeight::REGULAR);
             let text_x = check.right + 12.0;
             let baseline = row.center_y() - name_bounds.height() / 2.0 - name_bounds.top;
             let primary = settings_color(theme.text_pri);
@@ -567,7 +568,7 @@ impl SettingsApp {
                 &name,
                 Point::new(text_x - name_bounds.left, baseline),
                 14.0,
-                false,
+                FontWeight::REGULAR,
                 name_color,
             );
             let position = (slot + 1).to_string();
@@ -576,7 +577,7 @@ impl SettingsApp {
                 &position,
                 Point::new(text_x + name_bounds.width() + 10.0, baseline),
                 12.0,
-                false,
+                FontWeight::REGULAR,
                 secondary,
             );
 
@@ -642,7 +643,7 @@ impl SettingsApp {
                     list.bottom + HINT_GAP + HINT_SIZE + index as f32 * HINT_LINE_HEIGHT,
                 ),
                 HINT_SIZE,
-                false,
+                FontWeight::REGULAR,
                 settings_color(theme.text_sec),
             );
         }

@@ -36,6 +36,14 @@ impl FontStyle {
         }
     }
 
+    pub const fn with_weight(weight: FontWeight) -> Self {
+        Self {
+            weight,
+            width: FontWidth(5),
+            slant: Slant::Upright,
+        }
+    }
+
     pub const fn italic() -> Self {
         Self {
             weight: FontWeight(400),
@@ -70,6 +78,12 @@ impl FontStyle {
 }
 
 impl FontWeight {
+    pub const LIGHT: Self = Self(300);
+    pub const REGULAR: Self = Self(400);
+    pub const MEDIUM: Self = Self(500);
+    pub const SEMIBOLD: Self = Self(600);
+    pub const BOLD: Self = Self(700);
+
     pub const fn new(weight: u16) -> Self {
         Self(weight)
     }
@@ -80,6 +94,12 @@ impl FontWeight {
 
     pub const fn is_at_least_semibold(self) -> bool {
         self.0 >= 600
+    }
+}
+
+impl From<FontWeight> for FontStyle {
+    fn from(weight: FontWeight) -> Self {
+        Self::with_weight(weight)
     }
 }
 

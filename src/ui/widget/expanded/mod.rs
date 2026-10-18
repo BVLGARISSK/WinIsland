@@ -6,7 +6,7 @@ pub mod time;
 use crate::utils::shape::expanded_island_radius;
 use winisland_core::config::{WIDGET_GRID_COLS, WIDGET_GRID_ROWS, WidgetKind, widget_footprint};
 use winisland_render::text::FontManager;
-use winisland_render::{Painter, Path, Point, Rect, Rgba, StrokeCap, StrokeJoin};
+use winisland_render::{FontWeight, Painter, Path, Point, Rect, Rgba, StrokeCap, StrokeJoin};
 
 #[derive(Debug, Clone, Copy)]
 pub struct WidgetGridLayout {
@@ -121,10 +121,10 @@ pub(crate) fn draw_widget_text_centered(
     text: &str,
     bounds: Rect,
     size: f32,
-    bold: bool,
+    weight: FontWeight,
     color: Rgba,
 ) {
-    let glyph_bounds = FontManager::global().measure_str(text, size, bold);
+    let glyph_bounds = FontManager::global().measure_str(text, size, weight);
     let text_x = bounds.left + (bounds.width() - glyph_bounds.width()) / 2.0 - glyph_bounds.left;
     let baseline_y =
         bounds.top + (bounds.height() - glyph_bounds.height()) / 2.0 - glyph_bounds.top;
@@ -133,7 +133,7 @@ pub(crate) fn draw_widget_text_centered(
         text,
         Point::new(text_x, baseline_y),
         size,
-        bold,
+        weight,
         color,
     );
 }

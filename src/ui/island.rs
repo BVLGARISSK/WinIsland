@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 pub(crate) use mini::{
-    lyric_font_size as mini_lyric_font_size, lyric_insets as mini_lyric_insets,
-    lyric_pair_height as mini_lyric_pair_height,
+    LYRIC_WEIGHT as MINI_LYRIC_WEIGHT, lyric_font_size as mini_lyric_font_size,
+    lyric_insets as mini_lyric_insets, lyric_pair_height as mini_lyric_pair_height,
 };
 
 use self::background::{BackgroundParams, draw_background};

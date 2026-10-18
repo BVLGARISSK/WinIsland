@@ -18,8 +18,8 @@ use crate::utils::cover::decode_cover_image;
 use crate::utils::scroll::{ScrollDrawParams, ScrollText};
 use winisland_render::text::{DrawTextCachedParams, FontManager};
 use winisland_render::{
-    BlurSpec, FontStyle, Image, ImageOptions, LayerSpec, Painter, Path, Radius, Rect, Rgba,
-    Sampling, Vec2,
+    BlurSpec, FontStyle, FontWeight, Image, ImageOptions, LayerSpec, Painter, Path, Radius, Rect,
+    Rgba, Sampling, Vec2,
 };
 
 use std::cell::RefCell;
@@ -391,7 +391,7 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
                 x: bar_full_left,
                 y: text_baseline_y,
                 size: time_font_size,
-                bold: false,
+                weight: FontWeight::MEDIUM,
                 color: time_color,
                 blur: None,
             });
@@ -399,7 +399,7 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
             let remaining_w = FontManager::global().measure_text_cached(
                 &cache.remaining_text,
                 time_font_size,
-                FontStyle::normal(),
+                FontWeight::MEDIUM,
             );
             draw_text_cached(DrawTextCachedParams {
                 painter,
@@ -407,7 +407,7 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
                 x: bar_full_right - remaining_w,
                 y: text_baseline_y,
                 size: time_font_size,
-                bold: false,
+                weight: FontWeight::MEDIUM,
                 color: time_color,
                 blur: None,
             });
@@ -747,7 +747,7 @@ fn draw_track_text(params: TrackTextParams) {
     } else {
         15.0 * scale
     };
-    let title_style = FontStyle::bold();
+    let title_style = FontStyle::from(FontWeight::SEMIBOLD);
 
     TITLE_SCROLL.with(|cell| {
         let mut scroll = cell.borrow_mut();

@@ -87,6 +87,14 @@ pub struct AppConfig {
     pub lyrics_mode: String,
     pub lyrics_local_dir: Option<String>,
     pub custom_font_path: Option<String>,
+    pub font_family: Option<String>,
+    #[educe(Default = "regular")]
+    #[setting(choice(
+        "light" => "font_weight_light",
+        "regular" => "font_weight_regular",
+        "bold" => "font_weight_bold",
+    ))]
+    pub font_weight: String,
     pub auto_start: bool,
     #[setting(toggle)]
     pub auto_hide: bool,

@@ -1,7 +1,7 @@
 use super::{draw_widget_rounded_background, draw_widget_text_centered};
 use std::cell::RefCell;
 use winisland_core::i18n::tr;
-use winisland_render::{Painter, Rect, Rgba};
+use winisland_render::{FontWeight, Painter, Rect, Rgba};
 
 struct CalendarText {
     year: u16,
@@ -99,7 +99,7 @@ pub fn draw_calendar_widget(
             &cache.month_text,
             Rect::from_xywh(x, y + h * 0.08, w, h * 0.18),
             (h * 0.14).clamp(9.0 * scale, 15.0 * scale),
-            true,
+            FontWeight::SEMIBOLD,
             month_color,
         );
 
@@ -109,7 +109,7 @@ pub fn draw_calendar_widget(
             &cache.day_text,
             Rect::from_xywh(x, y + h * 0.27, w, h * 0.48),
             day_size,
-            true,
+            FontWeight::SEMIBOLD,
             day_color,
         );
 
@@ -118,7 +118,7 @@ pub fn draw_calendar_widget(
             &cache.weekday_text,
             Rect::from_xywh(x, y + h * 0.78, w, h * 0.14),
             (h * 0.12).clamp(8.0 * scale, 12.0 * scale),
-            false,
+            FontWeight::MEDIUM,
             weekday_color,
         );
     });

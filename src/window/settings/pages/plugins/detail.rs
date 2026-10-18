@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use winisland_render::FontWeight;
 use winisland_render::{Painter, Point, Radius, Rect, Rgba, Vec2};
 
 use crate::plugin::inventory::InstalledPlugin;
@@ -291,10 +292,16 @@ impl SettingsApp {
             fm,
             &plugin.name(),
             17.0,
-            winisland_render::FontStyle::bold(),
+            FontWeight::SEMIBOLD,
             name_width.max(30.0),
         );
-        SettingsPainter::new(painter).text(&name, (info_x, y + 22.0), 17.0, true, theme.text_pri);
+        SettingsPainter::new(painter).text(
+            &name,
+            (info_x, y + 22.0),
+            17.0,
+            FontWeight::SEMIBOLD,
+            theme.text_pri,
+        );
         let subtitle = ellipsize_text(
             fm,
             &format!("{} · v{}", plugin.author(), plugin.version()),
@@ -306,7 +313,7 @@ impl SettingsApp {
             &subtitle,
             (info_x, y + 43.0),
             11.5,
-            false,
+            FontWeight::REGULAR,
             theme.text_sec,
         );
 
@@ -324,7 +331,7 @@ impl SettingsApp {
                         &tr("plugin_builtin"),
                         (panel_x + DETAIL_PADDING, DETAIL_ACTION_Y + 18.0),
                         11.0,
-                        true,
+                        FontWeight::MEDIUM,
                         theme.text_sec,
                     );
                 } else {
@@ -355,7 +362,7 @@ impl SettingsApp {
                 &tr("plugin_open_github"),
                 (button.center_x(), button.top + 18.0),
                 11.0,
-                true,
+                FontWeight::MEDIUM,
                 settings_color(theme.accent),
             );
         }
@@ -386,7 +393,7 @@ impl SettingsApp {
                 &reason,
                 (warning.left + 10.0, warning.top + 25.0),
                 11.0,
-                false,
+                FontWeight::REGULAR,
                 Rgba::from_rgb(255, 69, 58),
             );
             content_y += 54.0;
@@ -453,7 +460,7 @@ fn draw_detail_action(
         &label,
         (rect.center_x(), rect.top + 18.0),
         11.0,
-        true,
+        FontWeight::MEDIUM,
         settings_color(text_color),
     );
 }
@@ -470,7 +477,7 @@ fn draw_uninstall_button(painter: Painter<'_>, panel_x: f32, has_github: bool, c
         }),
         (rect.center_x(), rect.top + 18.0),
         11.0,
-        true,
+        FontWeight::MEDIUM,
         Rgba::from_rgb(255, 69, 58),
     );
 }
@@ -501,26 +508,22 @@ fn draw_panel_header(painter: Painter<'_>, theme: &SettingsTheme, panel_x: f32) 
         &tr("plugin_details"),
         (panel_x + DETAIL_PADDING, 37.0),
         15.0,
-        true,
+        FontWeight::SEMIBOLD,
         settings_color(theme.text_pri),
     );
 }
 
 fn toggle_rect(panel_x: f32) -> Rect {
     Rect::from_xywh(
-        panel_x + DETAIL_W - DETAIL_PADDING - 42.0,
+        panel_x + DETAIL_W - DETAIL_PADDING - 48.0,
         DETAIL_HEADER_Y - 4.0,
-        48.0,
+        54.0,
         32.0,
     )
 }
 
 fn detail_action_rect(panel_x: f32, label: &str) -> Rect {
-    let width = (FontManager::global().measure_text_cached(
-        label,
-        11.0,
-        winisland_render::FontStyle::bold(),
-    ) + 24.0)
+    let width = (FontManager::global().measure_text_cached(label, 11.0, FontWeight::MEDIUM) + 24.0)
         .clamp(64.0, 112.0);
     Rect::from_xywh(
         panel_x + DETAIL_PADDING + 116.0 + ACTION_GAP,

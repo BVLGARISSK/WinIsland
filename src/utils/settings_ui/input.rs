@@ -1,7 +1,6 @@
 use super::items::{
-    CONTENT_PADDING, GROUP_INNER_PAD, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT, STEPPER_BTN_SIZE,
-    STEPPER_GAP, STEPPER_VALUE_W, SettingsItem, TOGGLE_H, TOGGLE_W, picker_button_rects,
-    trailing_control_rect,
+    CONTENT_PADDING, GROUP_INNER_PAD, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT, SettingsItem, TOGGLE_H,
+    TOGGLE_W, picker_button_rects, stepper_rects, trailing_control_rect,
 };
 use crate::ui::widget::compact::widget_width;
 use crate::ui::widget::expanded::{WidgetGridLayout, widget_corner_radius, widget_grid_layout};
@@ -37,8 +36,6 @@ pub enum ClickResult {
     StepperDec(usize),
     StepperInc(usize),
     StepperValue(usize),
-    FontSelect(usize),
-    FontReset(usize),
     CenterLink(usize),
     SourceButton(usize),
     RowButton(usize),
@@ -88,8 +85,6 @@ impl ClickResult {
             | ClickResult::StepperDec(index)
             | ClickResult::StepperInc(index)
             | ClickResult::StepperValue(index)
-            | ClickResult::FontSelect(index)
-            | ClickResult::FontReset(index)
             | ClickResult::CenterLink(index)
             | ClickResult::SourceButton(index)
             | ClickResult::RowButton(index)
@@ -601,18 +596,14 @@ pub fn hit_test(items: &[SettingsItem], mx: f32, my: f32, start_y: f32, width: f
     for (idx, item) in items.iter().enumerate() {
         match item {
             SettingsItem::RowStepper { enabled, .. } if *enabled => {
-                let cy = y + ROW_HEIGHT / 2.0;
-                let btn_inc_x = CONTENT_PADDING + content_w - GROUP_INNER_PAD - STEPPER_BTN_SIZE;
-                let value_x = btn_inc_x - STEPPER_GAP - STEPPER_VALUE_W;
-                let btn_dec_x = value_x - STEPPER_GAP - STEPPER_BTN_SIZE;
-                let btn_y = cy - STEPPER_BTN_SIZE / 2.0;
-                if in_rect(mx, my, btn_dec_x, btn_y, STEPPER_BTN_SIZE, STEPPER_BTN_SIZE) {
-                    return ClickResult::StepperDec(idx);
-                }
-                if in_rect(mx, my, btn_inc_x, btn_y, STEPPER_BTN_SIZE, STEPPER_BTN_SIZE) {
+                let (value, increment, decrement) = stepper_rects(y, ROW_HEIGHT, content_w);
+                if increment.inset(-2.0).contains(point) && my < increment.bottom {
                     return ClickResult::StepperInc(idx);
                 }
-                if in_rect(mx, my, value_x, btn_y, STEPPER_VALUE_W, STEPPER_BTN_SIZE) {
+                if decrement.inset(-2.0).contains(point) {
+                    return ClickResult::StepperDec(idx);
+                }
+                if value.contains(point) {
                     return ClickResult::StepperValue(idx);
                 }
             }
@@ -621,15 +612,6 @@ pub fn hit_test(items: &[SettingsItem], mx: f32, my: f32, start_y: f32, width: f
                     .contains(point)
                 {
                     return ClickResult::Switch(idx);
-                }
-            }
-            SettingsItem::RowFontPicker { reset_label, .. } => {
-                let (select, reset) = picker_button_rects(y, ROW_HEIGHT, content_w);
-                if select.contains(point) {
-                    return ClickResult::FontSelect(idx);
-                }
-                if reset_label.is_some() && reset.contains(point) {
-                    return ClickResult::FontReset(idx);
                 }
             }
             SettingsItem::RowFolderPicker {

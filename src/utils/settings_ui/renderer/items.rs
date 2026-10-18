@@ -1,4 +1,5 @@
 use winisland_render::FontStyle;
+use winisland_render::FontWeight;
 use winisland_render::Image;
 use winisland_render::ImageOptions;
 use winisland_render::Painter;
@@ -9,19 +10,18 @@ use winisland_render::Rgba;
 use winisland_render::Sampling;
 use winisland_render::StrokeCap;
 use winisland_render::StrokeJoin;
-use winisland_render::text::{DrawTextInRectParams, FontManager};
+use winisland_render::text::FontManager;
 
 use crate::utils::color::SettingsTheme;
 use crate::utils::color::settings_color;
 
 use super::super::items::{
-    CONTENT_PADDING, GROUP_INNER_PAD, GROUP_RADIUS, POPUP_BTN_H, POPUP_BTN_R, POPUP_BTN_W,
-    ROW_HEIGHT, STEPPER_BTN_SIZE, STEPPER_GAP, STEPPER_VALUE_W, SettingsItem, TOGGLE_H, TOGGLE_W,
-    picker_button_rects, trailing_control_rect,
+    CONTENT_PADDING, GROUP_INNER_PAD, GROUP_RADIUS, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT,
+    SettingsItem, TOGGLE_H, TOGGLE_W, picker_button_rects, stepper_rects, trailing_control_rect,
 };
 use super::controls::{
-    PillBtnParams, SettingsPainter, draw_pill_btn, draw_row_separator, draw_stepper_btn,
-    draw_switch, ellipsize_text,
+    PillBtnParams, SettingsPainter, StepperParams, draw_pill_btn, draw_row_separator, draw_stepper,
+    draw_switch, draw_updown_indicator, ellipsize_text, text_baseline,
 };
 use super::widget_preview::{WidgetPreviewParams, draw_widget_preview};
 use super::{ActiveStepperValue, DrawItemsParams};
@@ -66,11 +66,12 @@ fn draw_row_text(ctx: &ItemCtx, y: f32, height: f32, label: &str, color: Rgba) -
     let cy = y + height / 2.0;
     let visible = ctx.row_visible(y, height);
     if visible {
-        SettingsPainter::new(ctx.painter).text(
+        FontManager::global().draw_str(
+            ctx.painter,
             label,
-            (CONTENT_PADDING + GROUP_INNER_PAD, cy + 5.0),
+            Point::new(CONTENT_PADDING + GROUP_INNER_PAD, text_baseline(cy, 13.0)),
             13.0,
-            false,
+            FontWeight::REGULAR,
             color,
         );
     }
@@ -88,85 +89,22 @@ fn draw_row_stepper(
 ) {
     let painter = ctx.painter;
     let theme = ctx.theme;
-    let content_w = ctx.content_w;
     let (cy, visible) = draw_row_text(ctx, y, ROW_HEIGHT, label, row_text_color(ctx, enabled));
-
-    let btn_inc_x = CONTENT_PADDING + content_w - GROUP_INNER_PAD - STEPPER_BTN_SIZE;
-    let value_x = btn_inc_x - STEPPER_GAP - STEPPER_VALUE_W;
-    let btn_dec_x = value_x - STEPPER_GAP - STEPPER_BTN_SIZE;
-    let btn_y = cy - STEPPER_BTN_SIZE / 2.0;
+    let (value_rect, increment, decrement) = stepper_rects(y, ROW_HEIGHT, ctx.content_w);
     if visible {
-        let control_x = btn_dec_x;
-        let control_w = STEPPER_BTN_SIZE * 2.0 + STEPPER_VALUE_W;
-        painter.fill_round_rect(
-            Rect::from_xywh(control_x, btn_y, control_w, STEPPER_BTN_SIZE),
-            Radius::uniform(POPUP_BTN_R),
-            settings_color(if enabled {
-                theme.control_bg
-            } else {
-                theme.control_disabled
-            }),
-        );
-        painter.stroke_round_rect(
-            Rect::from_xywh(
-                control_x + 0.375,
-                btn_y + 0.375,
-                control_w - 0.75,
-                STEPPER_BTN_SIZE - 0.75,
-            ),
-            Radius::uniform(POPUP_BTN_R),
-            0.75,
-            settings_color(theme.control_border),
-        );
-        painter.stroke_line(
-            Point::new(value_x, btn_y + 4.0),
-            Point::new(value_x, btn_y + STEPPER_BTN_SIZE - 4.0),
-            0.75,
-            settings_color(theme.separator),
-            StrokeCap::Butt,
-        );
-        painter.stroke_line(
-            Point::new(btn_inc_x, btn_y + 4.0),
-            Point::new(btn_inc_x, btn_y + STEPPER_BTN_SIZE - 4.0),
-            0.75,
-            settings_color(theme.separator),
-            StrokeCap::Butt,
-        );
-        draw_stepper_btn(
-            painter,
-            btn_dec_x,
-            btn_y,
-            "−",
-            enabled,
-            theme,
-            ctx.hovered(Rect::from_xywh(
-                btn_dec_x,
-                btn_y,
-                STEPPER_BTN_SIZE,
-                STEPPER_BTN_SIZE,
-            )),
-        );
-        draw_stepper_btn(
-            painter,
-            btn_inc_x,
-            btn_y,
-            "+",
-            enabled,
-            theme,
-            ctx.hovered(Rect::from_xywh(
-                btn_inc_x,
-                btn_y,
-                STEPPER_BTN_SIZE,
-                STEPPER_BTN_SIZE,
-            )),
-        );
-    }
-
-    let val_center = value_x + STEPPER_VALUE_W / 2.0;
-    if visible {
-        let fm = FontManager::global();
         let is_editing = active_stepper_value.as_ref().is_some_and(|input| {
-            (input.rect.left - value_x).abs() < 0.5 && (input.rect.top - btn_y).abs() < 0.5
+            (input.rect.left - value_rect.left).abs() < 0.5
+                && (input.rect.top - value_rect.top).abs() < 0.5
+        });
+        draw_stepper(StepperParams {
+            painter,
+            theme,
+            value: value_rect,
+            increment,
+            decrement,
+            hover: ctx.hover_pos,
+            enabled,
+            editing: is_editing,
         });
         let display_value = active_stepper_value
             .as_ref()
@@ -176,42 +114,27 @@ fn draw_row_stepper(
         let show_caret = active_stepper_value
             .as_ref()
             .is_some_and(|input| is_editing && input.show_caret);
-        if is_editing {
-            painter.fill_round_rect(
-                Rect::from_xywh(value_x, btn_y, STEPPER_VALUE_W, STEPPER_BTN_SIZE),
-                Radius::uniform(5.0),
-                settings_color(theme.card_highlight),
-            );
-            painter.stroke_round_rect(
-                Rect::from_xywh(
-                    value_x + 0.5,
-                    btn_y + 0.5,
-                    STEPPER_VALUE_W - 1.0,
-                    STEPPER_BTN_SIZE - 1.0,
-                ),
-                Radius::uniform(4.5),
-                1.0,
-                settings_color(theme.accent),
-            );
-        }
+        let fm = FontManager::global();
         let text_color = settings_color(if enabled {
             theme.text_pri
         } else {
             theme.text_sec
         });
-        let val_w = fm.measure_text_cached(display_value, 13.0, FontStyle::normal());
-        SettingsPainter::new(painter).text(
+        let value_w = fm.measure_text_cached(display_value, 13.0, FontStyle::normal());
+        let value_x = value_rect.center_x() - value_w / 2.0;
+        fm.draw_str(
+            painter,
             display_value,
-            (val_center - val_w / 2.0, cy + 5.0),
+            Point::new(value_x, text_baseline(cy, 13.0)),
             13.0,
-            false,
+            FontWeight::REGULAR,
             text_color,
         );
         if show_caret {
-            let caret_x = val_center + val_w / 2.0 + 1.5;
+            let caret_x = value_x + value_w + 1.5;
             painter.stroke_line(
-                Point::new(caret_x, btn_y + 5.0),
-                Point::new(caret_x, btn_y + STEPPER_BTN_SIZE - 5.0),
+                Point::new(caret_x, value_rect.top + 5.0),
+                Point::new(caret_x, value_rect.bottom - 5.0),
                 1.0,
                 settings_color(theme.accent),
                 StrokeCap::Butt,
@@ -243,48 +166,6 @@ fn draw_row_switch(
     advance_group_row(ctx, y + ROW_HEIGHT, groups, visible);
 }
 
-fn draw_row_font_picker(
-    ctx: &ItemCtx,
-    y: f32,
-    label: &str,
-    btn_label: &str,
-    reset_label: &Option<String>,
-    groups: &mut GroupRows,
-) {
-    let painter = ctx.painter;
-    let theme = ctx.theme;
-    let content_w = ctx.content_w;
-    let (_, visible) = draw_row_text(ctx, y, ROW_HEIGHT, label, settings_color(theme.text_pri));
-    if visible {
-        let (select, reset) = picker_button_rects(y, ROW_HEIGHT, content_w);
-        draw_pill_btn(PillBtnParams {
-            painter,
-            rect: select,
-            label: btn_label,
-            text_color: settings_color(theme.text_pri),
-            bg_color: settings_color(theme.card_highlight),
-            hover_bg_color: settings_color(theme.control_hover),
-            border_color: settings_color(theme.control_border),
-            hovered: ctx.hovered(select),
-        });
-
-        if let Some(rl) = reset_label {
-            draw_pill_btn(PillBtnParams {
-                painter,
-                rect: reset,
-                label: rl,
-                text_color: settings_color(theme.danger),
-                bg_color: settings_color(theme.card_highlight),
-                hover_bg_color: settings_color(theme.control_hover),
-                border_color: settings_color(theme.control_border),
-                hovered: ctx.hovered(reset),
-            });
-        }
-    }
-
-    advance_group_row(ctx, y + ROW_HEIGHT, groups, visible);
-}
-
 fn draw_row_folder_picker(
     ctx: &ItemCtx,
     y: f32,
@@ -301,60 +182,56 @@ fn draw_row_folder_picker(
     let has_path = current_path.as_ref().is_some_and(|p| !p.is_empty());
     let row_h = if has_path { 64.0 } else { ROW_HEIGHT };
     let row_x = CONTENT_PADDING + GROUP_INNER_PAD;
-    let (cy, visible) = draw_row_text(ctx, y, row_h, label, row_text_color(ctx, enabled));
+    let label_y = if has_path { y + 22.0 } else { y + row_h / 2.0 };
+    let visible = ctx.row_visible(y, row_h);
 
     if visible {
+        fm.draw_str(
+            painter,
+            label,
+            Point::new(row_x, text_baseline(label_y, 13.0)),
+            13.0,
+            FontWeight::REGULAR,
+            row_text_color(ctx, enabled),
+        );
         if let Some(path) = current_path
             && !path.is_empty()
         {
-            let max_w = content_w - GROUP_INNER_PAD * 2.0 - 140.0;
+            let max_w = content_w - GROUP_INNER_PAD * 2.0 - 160.0;
             let display = ellipsize_text(fm, path, 11.0, FontStyle::normal(), max_w);
-            SettingsPainter::new(painter).text(
+            fm.draw_str(
+                painter,
                 &display,
-                (row_x, cy + 17.0),
+                Point::new(row_x, text_baseline(y + 42.0, 11.0)),
                 11.0,
-                false,
+                FontWeight::REGULAR,
                 settings_color(theme.text_sec),
             );
         }
 
-        let label_color = settings_color(if enabled {
-            theme.text_pri
-        } else {
-            theme.text_sec
-        });
-        let bg_color = settings_color(if enabled {
-            theme.card_highlight
-        } else {
-            theme.disabled
-        });
-
         let (select, clear) = picker_button_rects(y, row_h, content_w);
         draw_pill_btn(PillBtnParams {
             painter,
+            theme,
             rect: select,
             label: btn_label,
-            text_color: label_color,
-            bg_color,
-            hover_bg_color: settings_color(theme.control_hover),
-            border_color: settings_color(theme.control_border),
+            text_color: row_text_color(ctx, enabled),
             hovered: enabled && ctx.hovered(select),
+            enabled,
         });
-
-        if let Some(cl) = clear_label {
+        if let Some(clear_label) = clear_label {
             draw_pill_btn(PillBtnParams {
                 painter,
+                theme,
                 rect: clear,
-                label: cl,
+                label: clear_label,
                 text_color: settings_color(if enabled {
                     theme.danger
                 } else {
                     theme.text_sec
                 }),
-                bg_color,
-                hover_bg_color: settings_color(theme.control_hover),
-                border_color: settings_color(theme.control_border),
                 hovered: enabled && ctx.hovered(clear),
+                enabled,
             });
         }
     }
@@ -384,88 +261,29 @@ fn draw_row_source_select(
         .unwrap_or("");
 
     let button = trailing_control_rect(y, ROW_HEIGHT, content_w, POPUP_BTN_W, POPUP_BTN_H);
-    let btn_x = button.left;
-    let btn_y = button.top;
-    let is_open = active_source_button.is_some_and(|button| {
-        (button.left - btn_x).abs() < 0.5 && (button.top - btn_y).abs() < 0.5
+    let is_open = active_source_button.is_some_and(|open| {
+        (open.left - button.left).abs() < 0.5 && (open.top - button.top).abs() < 0.5
     });
 
     if visible {
-        painter.fill_round_rect(
-            button,
-            Radius::uniform(POPUP_BTN_R),
-            settings_color(if enabled {
-                if ctx.hovered(button) {
-                    theme.control_hover
-                } else {
-                    theme.control_bg
-                }
-            } else {
-                theme.control_disabled
-            }),
-        );
-        painter.stroke_round_rect(
-            Rect::from_xywh(
-                btn_x + 0.5,
-                btn_y + 0.5,
-                POPUP_BTN_W - 1.0,
-                POPUP_BTN_H - 1.0,
-            ),
-            Radius::uniform(POPUP_BTN_R),
-            if is_open { 1.25 } else { 0.75 },
-            settings_color(if is_open {
-                theme.accent
-            } else {
-                theme.control_border
-            }),
-        );
-
-        let text_w = POPUP_BTN_W - 22.0;
-        fm.draw_text_in_rect(DrawTextInRectParams {
+        let indicator = Rect::from_xywh(button.right - 18.0, cy - 10.0, 18.0, 20.0);
+        let hovered = ctx.hovered(button);
+        draw_updown_indicator(painter, theme, indicator, is_open, hovered, enabled);
+        let text_max = indicator.left - 8.0 - button.left;
+        let text = ellipsize_text(fm, selected_label, 13.0, FontStyle::normal(), text_max);
+        let text_w = fm.measure_text_cached(&text, 13.0, FontStyle::normal());
+        fm.draw_str(
             painter,
-            text: selected_label,
-            x: btn_x + 4.0,
-            y: btn_y + 17.0,
-            w: text_w,
-            size: 13.0,
-            bold: false,
-            color: settings_color(if enabled {
+            &text,
+            Point::new(indicator.left - 8.0 - text_w, text_baseline(cy, 13.0)),
+            13.0,
+            FontWeight::REGULAR,
+            settings_color(if enabled {
                 theme.text_pri
             } else {
                 theme.text_sec
             }),
-            blur: None,
-        });
-
-        let chev_cx = btn_x + POPUP_BTN_W - 12.0;
-        let chev_cy = cy;
-        let (top_y, bottom_y) = if is_open {
-            (chev_cy - 1.5, chev_cy + 1.5)
-        } else {
-            (chev_cy + 1.5, chev_cy - 1.5)
-        };
-        let chev_svg = format!(
-            "M {} {} L {} {} L {} {}",
-            chev_cx - 3.0,
-            bottom_y,
-            chev_cx,
-            top_y,
-            chev_cx + 3.0,
-            bottom_y,
         );
-        if let Some(chev_path) = winisland_render::Path::from_svg(&chev_svg) {
-            painter.stroke_path(
-                &chev_path,
-                1.5,
-                settings_color(if enabled {
-                    theme.text_sec
-                } else {
-                    theme.disabled
-                }),
-                StrokeCap::Butt,
-                StrokeJoin::Miter,
-            );
-        }
     }
 
     advance_group_row(ctx, y + ROW_HEIGHT, groups, visible);
@@ -484,27 +302,15 @@ fn draw_row_button(
     let content_w = ctx.content_w;
     let (_, visible) = draw_row_text(ctx, y, ROW_HEIGHT, label, row_text_color(ctx, enabled));
     if visible {
-        let label_color = settings_color(if enabled {
-            theme.text_pri
-        } else {
-            theme.text_sec
-        });
-        let bg_color = settings_color(if enabled {
-            theme.control_bg
-        } else {
-            theme.control_disabled
-        });
-
         let button = trailing_control_rect(y, ROW_HEIGHT, content_w, POPUP_BTN_W, POPUP_BTN_H);
         draw_pill_btn(PillBtnParams {
             painter,
+            theme,
             rect: button,
             label: btn_label,
-            text_color: label_color,
-            bg_color,
-            hover_bg_color: settings_color(theme.control_hover),
-            border_color: settings_color(theme.control_border),
+            text_color: row_text_color(ctx, enabled),
             hovered: enabled && ctx.hovered(button),
+            enabled,
         });
     }
 
@@ -570,7 +376,13 @@ fn draw_row_app_item(
         });
         let max_label_w = check_x - row_x - 8.0;
         let display = ellipsize_text(fm, label, 13.0, FontStyle::normal(), max_label_w);
-        SettingsPainter::new(painter).text(&display, (row_x, cy + 5.0), 13.0, false, text_color);
+        SettingsPainter::new(painter).text(
+            &display,
+            (row_x, cy + 5.0),
+            13.0,
+            FontWeight::REGULAR,
+            text_color,
+        );
     }
 
     advance_group_row(ctx, y + ROW_HEIGHT, groups, visible);
@@ -615,7 +427,7 @@ fn draw_center_link(ctx: &ItemCtx, y: f32, height: f32, label: &str, color: Rgba
         label,
         (ctx.width / 2.0, y + 24.0),
         13.0,
-        false,
+        FontWeight::REGULAR,
         color,
     );
 }
@@ -628,7 +440,7 @@ fn draw_center_text(ctx: &ItemCtx, y: f32, height: f32, text: &str, size: f32, c
         text,
         (ctx.width / 2.0, y + 22.0),
         size,
-        false,
+        FontWeight::REGULAR,
         color,
     );
 }
@@ -705,11 +517,12 @@ pub fn draw_items(params: DrawItemsParams<'_>) {
             SettingsItem::SectionHeader { label } => {
                 let h = item.height();
                 if y + h >= visible_min_y && y <= visible_max_y {
-                    SettingsPainter::new(painter).text(
+                    FontManager::global().draw_str(
+                        painter,
                         label,
-                        (CONTENT_PADDING + 4.0, y + 22.0),
+                        Point::new(CONTENT_PADDING + 4.0, text_baseline(y + h - 13.0, 13.0)),
                         13.0,
-                        true,
+                        FontWeight::SEMIBOLD,
                         settings_color(theme.text_pri),
                     );
                 }
@@ -724,26 +537,20 @@ pub fn draw_items(params: DrawItemsParams<'_>) {
                     .filter(|item| item.is_row())
                     .count();
                 if y + total_h >= visible_min_y && y <= visible_max_y {
-                    painter.fill_round_rect(
-                        Rect::from_xywh(CONTENT_PADDING, y + 2.0, content_w, total_h),
-                        Radius::uniform(GROUP_RADIUS),
-                        settings_color(theme.shadow),
-                    );
-                    painter.fill_round_rect(
-                        Rect::from_xywh(CONTENT_PADDING, y, content_w, total_h),
-                        Radius::uniform(GROUP_RADIUS),
+                    let group = Rect::from_xywh(CONTENT_PADDING, y, content_w, total_h);
+                    painter.fill_path(
+                        &winisland_render::Path::continuous_rounded_rect(group, GROUP_RADIUS),
                         settings_color(theme.group_bg),
                     );
-                    painter.stroke_round_rect(
-                        Rect::from_xywh(
-                            CONTENT_PADDING + 0.375,
-                            y + 0.375,
-                            content_w - 0.75,
-                            total_h - 0.75,
+                    painter.stroke_path(
+                        &winisland_render::Path::continuous_rounded_rect(
+                            group.inset(0.375),
+                            GROUP_RADIUS - 0.375,
                         ),
-                        Radius::uniform(GROUP_RADIUS),
                         0.75,
                         settings_color(theme.group_border),
+                        StrokeCap::Butt,
+                        StrokeJoin::Round,
                     );
                 }
             }
@@ -772,13 +579,6 @@ pub fn draw_items(params: DrawItemsParams<'_>) {
             } => {
                 draw_row_switch(&ctx, y, label, *enabled, anims.get(switch_idx), &mut groups);
                 switch_idx += 1;
-            }
-            SettingsItem::RowFontPicker {
-                label,
-                btn_label,
-                reset_label,
-            } => {
-                draw_row_font_picker(&ctx, y, label, btn_label, reset_label, &mut groups);
             }
             SettingsItem::RowFolderPicker {
                 label,

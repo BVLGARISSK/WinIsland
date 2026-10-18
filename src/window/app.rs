@@ -194,8 +194,7 @@ impl Default for App {
         let last_config_modified = std::fs::metadata(get_config_path())
             .and_then(|metadata| metadata.modified())
             .ok();
-        winisland_render::text::FontManager::global()
-            .set_custom_font_path(config.custom_font_path.as_deref());
+        crate::utils::fonts::apply(&config);
         let plugin_mgr = PluginManager::default();
         let plugin_host = match PluginHost::new(plugin_mgr.plugin_dir.clone(), 1) {
             Ok(host) => {

@@ -6,6 +6,7 @@ use winisland_platform::{
     CursorKind, InputState, Key, LogicalWindowSize, MouseButton, PlatformEvent, SettingsSpec,
     Theme, WindowId,
 };
+use winisland_render::FontWeight;
 use winisland_render::text::FontManager;
 use winisland_render::{
     FontStyle, Image, ImageOptions, Painter, Point, Radius, Rect, Renderer, RendererTargetId, Rgba,
@@ -14,17 +15,20 @@ use winisland_render::{
 
 use crate::platform::{MonitorRef, WindowRef, window};
 use crate::utils::color::{SettingsTheme, dark_settings_theme, light_settings_theme};
+use crate::utils::settings_ui::chrome::{
+    SidebarRow, draw_sidebar_row, draw_traffic_lights, draw_window_base, sidebar_panel,
+    traffic_light_at, traffic_lights_hovered,
+};
 use crate::utils::settings_ui::items::{
     CONTENT_PADDING, GROUP_INNER_PAD, GROUP_RADIUS, POPUP_BTN_H, POPUP_BTN_R, POPUP_BTN_W,
-    SIDEBAR_PAD, SIDEBAR_SEL_RADIUS,
+    SIDEBAR_PAD,
 };
+use crate::utils::settings_ui::text_baseline;
 use crate::utils::settings_ui::{SettingsPainter, ellipsize_text, settings_color};
-use crate::window::settings::{
-    SETTINGS_HEADER_H, SIDEBAR_ROW_GAP, SIDEBAR_ROW_H, SIDEBAR_START_Y, SIDEBAR_W,
-    WINDOW_CONTROL_CENTERS, WINDOW_CONTROL_RADIUS, WINDOW_RADIUS,
-};
+use crate::window::settings::{SETTINGS_HEADER_H, SIDEBAR_ROW_GAP, SIDEBAR_ROW_H, SIDEBAR_W};
 
-const WIN_W: f32 = 680.0;
+const WIN_W: f32 = 720.0;
+const GUIDE_TAB_TOP: f32 = 52.0;
 const WIN_H: f32 = 460.0;
 const GUIDE_TITLE: &str = "WinIsland Guide";
 const FEATURE_ROW_H: f32 = 56.0;
@@ -285,6 +289,7 @@ pub(crate) struct GuideApp {
     hover: Option<Hit>,
     tab_hover: [f32; PAGES.len()],
     finished: bool,
+    backdrop: bool,
 }
 
 fn fade(color: Rgba, alpha: f32) -> Rgba {
@@ -297,6 +302,7 @@ fn ease_out_cubic(t: f32) -> f32 {
 
 fn draw_icon(painter: Painter<'_>, icon: Icon, rect: Rect, alpha: f32) {
     if let Some(image) = icon.image() {
+        crate::utils::settings_ui::chrome::draw_icon_shadow(painter, rect, alpha);
         painter.draw_image(
             &image,
             rect,
@@ -307,37 +313,10 @@ fn draw_icon(painter: Painter<'_>, icon: Icon, rect: Rect, alpha: f32) {
     }
 }
 
-fn draw_window_control(
-    painter: Painter<'_>,
-    center: (f32, f32),
-    fill: Rgba,
-    border: Rgba,
-    highlighted: bool,
-) {
-    painter.fill_circle(
-        Point::new(center.0, center.1 + 0.75),
-        WINDOW_CONTROL_RADIUS + 0.25,
-        Rgba::from_argb(38, 0, 0, 0),
-    );
-    painter.fill_circle(Point::new(center.0, center.1), WINDOW_CONTROL_RADIUS, fill);
-    painter.stroke_circle(
-        Point::new(center.0, center.1),
-        WINDOW_CONTROL_RADIUS - 0.375,
-        0.75,
-        border,
-    );
-    if highlighted {
-        painter.fill_oval(
-            Rect::from_xywh(center.0 - 3.5, center.1 - 4.25, 7.0, 2.25),
-            Rgba::from_argb(36, 255, 255, 255),
-        );
-    }
-}
-
 fn tab_rect(index: usize) -> Rect {
     Rect::from_xywh(
         SIDEBAR_PAD,
-        SIDEBAR_START_Y + index as f32 * (SIDEBAR_ROW_H + SIDEBAR_ROW_GAP),
+        GUIDE_TAB_TOP + index as f32 * (SIDEBAR_ROW_H + SIDEBAR_ROW_GAP),
         SIDEBAR_W - SIDEBAR_PAD * 2.0,
         SIDEBAR_ROW_H,
     )
@@ -380,7 +359,7 @@ fn draw_pill_btn(
         label,
         (rect.center_x(), rect.center_y() + 4.0),
         12.0,
-        false,
+        FontWeight::REGULAR,
         text_color,
     );
 }
@@ -400,6 +379,7 @@ impl GuideApp {
             hover: None,
             tab_hover: [0.0; PAGES.len()],
             finished: false,
+            backdrop: false,
         }
     }
 
@@ -417,6 +397,7 @@ impl GuideApp {
             })
             .map_err(|error| error.to_string())?;
         self.window = Some(WindowRef(id));
+        self.backdrop = window().start_window_backdrop(id).is_ok();
         self.update_theme();
         self.transition = Some((1.0, Instant::now()));
         self.recreate_renderer_target(renderer)
@@ -498,16 +479,10 @@ impl GuideApp {
 
     fn hit_test(&self, x: f32, y: f32) -> Option<Hit> {
         let point = Point::new(x, y);
-        let control_hit = |center: (f32, f32)| {
-            let dx = x - center.0;
-            let dy = y - center.1;
-            dx * dx + dy * dy <= (WINDOW_CONTROL_RADIUS + 2.0).powi(2)
-        };
-        if control_hit(WINDOW_CONTROL_CENTERS[0]) {
-            return Some(Hit::Close);
-        }
-        if control_hit(WINDOW_CONTROL_CENTERS[1]) {
-            return Some(Hit::Minimize);
+        match traffic_light_at(x, y) {
+            Some(0) => return Some(Hit::Close),
+            Some(1) => return Some(Hit::Minimize),
+            _ => {}
         }
         if let Some(index) = (0..PAGES.len()).find(|index| tab_rect(*index).contains(point)) {
             return Some(Hit::Tab(index));
@@ -522,9 +497,7 @@ impl GuideApp {
     }
 
     fn controls_hovered(&self) -> bool {
-        self.focused
-            && (10.0..=70.0).contains(&self.mouse.0)
-            && (10.0..=30.0).contains(&self.mouse.1)
+        self.focused && traffic_lights_hovered(self.mouse.0, self.mouse.1)
     }
 
     fn go_to(&mut self, page: usize) {
@@ -678,21 +651,36 @@ impl GuideApp {
         self.advance();
         let scale = self.scale();
         let theme = self.theme();
+        let panel = sidebar_panel(SIDEBAR_W, WIN_H);
+        if self.backdrop
+            && let Some(window_ref) = self.window
+        {
+            self.backdrop = window().update_window_backdrop(
+                window_ref.id(),
+                [
+                    panel.left * scale,
+                    panel.top * scale,
+                    panel.width() * scale,
+                    panel.height() * scale,
+                ],
+                crate::utils::settings_ui::chrome::BACKDROP_CORNER * scale,
+            );
+        }
+        let backdrop = self.backdrop;
         let result = renderer.frame(target, |_, painter| {
             painter.scale(Vec2::new(scale, scale));
             let win_rect = Rect::from_xywh(0.0, 0.0, WIN_W, WIN_H);
             painter.save();
-            painter.clip_round_rect(win_rect, Radius::uniform(WINDOW_RADIUS));
-            painter.fill_rect(win_rect, settings_color(theme.win_bg));
+            crate::utils::settings_ui::chrome::clip_window(painter, win_rect);
+            draw_window_base(painter, &theme, win_rect, panel, backdrop);
             self.draw_sidebar(painter, &theme);
             self.draw_header(painter, &theme);
             self.draw_content(painter, &theme);
             self.draw_footer(painter, &theme);
             painter.restore();
-            painter.stroke_round_rect(
-                Rect::from_xywh(0.5, 0.5, WIN_W - 1.0, WIN_H - 1.0),
-                Radius::uniform(WINDOW_RADIUS - 0.5),
-                1.0,
+            crate::utils::settings_ui::chrome::stroke_window(
+                painter,
+                win_rect,
                 settings_color(theme.separator),
             );
         });
@@ -702,162 +690,60 @@ impl GuideApp {
     }
 
     fn draw_sidebar(&self, painter: Painter<'_>, theme: &SettingsTheme) {
-        painter.fill_rect(
-            Rect::from_xywh(0.0, 0.0, SIDEBAR_W, WIN_H),
-            settings_color(theme.sidebar_bg),
+        draw_traffic_lights(
+            painter,
+            self.is_light,
+            self.focused,
+            self.controls_hovered(),
+            theme.text_sec,
         );
-
-        let inactive_fill = if self.is_light {
-            Rgba::from_rgb(184, 184, 188)
-        } else {
-            Rgba::from_rgb(82, 82, 86)
-        };
-        let fills = if self.focused {
-            [
-                Rgba::from_rgb(255, 95, 87),
-                Rgba::from_rgb(254, 188, 46),
-                Rgba::from_rgb(126, 126, 132),
-            ]
-        } else {
-            [inactive_fill; 3]
-        };
-        let border = if self.is_light {
-            Rgba::from_argb(38, 0, 0, 0)
-        } else {
-            Rgba::from_argb(64, 0, 0, 0)
-        };
-        for (center, fill) in WINDOW_CONTROL_CENTERS.into_iter().zip(fills) {
-            draw_window_control(painter, center, fill, border, self.focused);
-        }
-        if self.controls_hovered() {
-            let close_color = Rgba::from_rgb(78, 0, 2);
-            painter.stroke_line(
-                Point::new(17.5, 17.5),
-                Point::new(22.5, 22.5),
-                1.1,
-                close_color,
-                StrokeCap::Round,
-            );
-            painter.stroke_line(
-                Point::new(22.5, 17.5),
-                Point::new(17.5, 22.5),
-                1.1,
-                close_color,
-                StrokeCap::Round,
-            );
-            painter.stroke_line(
-                Point::new(36.5, 20.0),
-                Point::new(43.5, 20.0),
-                1.1,
-                Rgba::from_rgb(92, 62, 0),
-                StrokeCap::Round,
-            );
-        }
-
-        painter.stroke_line(
-            Point::new(SIDEBAR_W, 0.0),
-            Point::new(SIDEBAR_W, WIN_H),
-            0.5,
-            settings_color(theme.separator),
-            StrokeCap::Butt,
-        );
-
         for (index, page) in PAGES.iter().enumerate() {
-            let row = tab_rect(index);
-            let text_color = if index == self.page {
-                painter.fill_round_rect(
-                    row,
-                    Radius::uniform(SIDEBAR_SEL_RADIUS),
-                    settings_color(if self.focused {
-                        theme.selection_bg
-                    } else {
-                        theme.card_highlight
-                    }),
-                );
-                if self.focused {
-                    if self.is_light {
-                        settings_color(theme.selection_text)
-                    } else {
-                        Rgba::WHITE
-                    }
-                } else {
-                    settings_color(theme.text_pri)
-                }
-            } else {
-                let hover = self.tab_hover[index];
-                if hover > 0.005 {
-                    let base = theme.sidebar_hover;
-                    painter.fill_round_rect(
-                        row,
-                        Radius::uniform(SIDEBAR_SEL_RADIUS),
-                        Rgba::from_argb(
-                            (base.a() as f32 * hover) as u8,
-                            base.r(),
-                            base.g(),
-                            base.b(),
-                        ),
-                    );
-                }
-                settings_color(if self.hover == Some(Hit::Tab(index)) {
-                    theme.text_pri
-                } else {
-                    theme.text_sec
-                })
-            };
-            draw_icon(
+            let icon = page.icon.image();
+            draw_sidebar_row(
                 painter,
-                page.icon,
-                Rect::from_xywh(row.left + 7.0, row.top + 6.0, 22.0, 22.0),
-                1.0,
-            );
-            let label = ellipsize_text(
-                FontManager::global(),
-                &tr(page.tab),
-                13.0,
-                FontStyle::normal(),
-                row.width() - 44.0,
-            );
-            SettingsPainter::new(painter).text(
-                &label,
-                (row.left + 36.0, row.top + 22.0),
-                13.0,
-                index == self.page,
-                text_color,
+                theme,
+                SidebarRow {
+                    rect: tab_rect(index),
+                    icon: icon.as_ref(),
+                    label: &tr(page.tab),
+                    selected: index == self.page,
+                    focused: self.focused,
+                    hover: self.tab_hover[index],
+                },
             );
         }
     }
 
     fn draw_header(&self, painter: Painter<'_>, theme: &SettingsTheme) {
         let title_x = SIDEBAR_W + CONTENT_PADDING;
+        let center_y = SETTINGS_HEADER_H / 2.0 + 2.0;
         let title = ellipsize_text(
             FontManager::global(),
             &tr(PAGES[self.page].title),
-            17.0,
-            FontStyle::bold(),
+            15.0,
+            FontWeight::SEMIBOLD,
             WIN_W - title_x - 70.0,
         );
-        SettingsPainter::new(painter).text(
+        FontManager::global().draw_str(
+            painter,
             &title,
-            (title_x, 39.0),
-            17.0,
-            true,
+            Point::new(title_x, text_baseline(center_y, 15.0)),
+            15.0,
+            FontWeight::SEMIBOLD,
             settings_color(theme.text_pri),
         );
         let progress = format!("{} / {}", self.page + 1, PAGES.len());
         let width = FontManager::global().measure_text_cached(&progress, 12.0, FontStyle::normal());
-        SettingsPainter::new(painter).text(
+        FontManager::global().draw_str(
+            painter,
             &progress,
-            (WIN_W - CONTENT_PADDING - width, 38.0),
+            Point::new(
+                WIN_W - CONTENT_PADDING - width,
+                text_baseline(center_y, 12.0),
+            ),
             12.0,
-            false,
+            FontWeight::REGULAR,
             settings_color(theme.text_sec),
-        );
-        painter.stroke_line(
-            Point::new(SIDEBAR_W, SETTINGS_HEADER_H - 0.5),
-            Point::new(WIN_W, SETTINGS_HEADER_H - 0.5),
-            0.5,
-            settings_color(theme.separator),
-            StrokeCap::Butt,
         );
     }
 
@@ -908,32 +794,26 @@ impl GuideApp {
             &subtitle,
             (CONTENT_PADDING + 4.0, y + 22.0),
             13.0,
-            false,
+            FontWeight::REGULAR,
             fade(settings_color(theme.text_sec), alpha),
         );
         y += 36.0;
 
         let group_h = page.features.len() as f32 * FEATURE_ROW_H;
-        painter.fill_round_rect(
-            Rect::from_xywh(CONTENT_PADDING, y + 2.0, content_w, group_h),
-            Radius::uniform(GROUP_RADIUS),
-            fade(settings_color(theme.shadow), alpha),
-        );
-        painter.fill_round_rect(
-            Rect::from_xywh(CONTENT_PADDING, y, content_w, group_h),
-            Radius::uniform(GROUP_RADIUS),
+        let group = Rect::from_xywh(CONTENT_PADDING, y, content_w, group_h);
+        painter.fill_path(
+            &winisland_render::Path::continuous_rounded_rect(group, GROUP_RADIUS),
             fade(settings_color(theme.group_bg), alpha),
         );
-        painter.stroke_round_rect(
-            Rect::from_xywh(
-                CONTENT_PADDING + 0.375,
-                y + 0.375,
-                content_w - 0.75,
-                group_h - 0.75,
+        painter.stroke_path(
+            &winisland_render::Path::continuous_rounded_rect(
+                group.inset(0.375),
+                GROUP_RADIUS - 0.375,
             ),
-            Radius::uniform(GROUP_RADIUS),
             0.75,
             fade(settings_color(theme.group_border), alpha),
+            StrokeCap::Butt,
+            winisland_render::StrokeJoin::Round,
         );
 
         for (index, item) in page.features.iter().enumerate() {
@@ -986,14 +866,14 @@ impl GuideApp {
                 &title,
                 (text_x, row_y + 25.0),
                 13.0,
-                false,
+                FontWeight::REGULAR,
                 fade(settings_color(theme.text_pri), alpha),
             );
             SettingsPainter::new(painter).text(
                 &detail,
                 (text_x, row_y + 41.0),
                 11.0,
-                false,
+                FontWeight::REGULAR,
                 fade(settings_color(theme.text_sec), alpha),
             );
             if index + 1 < page.features.len() {
