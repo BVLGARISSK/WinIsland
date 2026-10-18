@@ -141,6 +141,7 @@ liquid_glass_siri_note=实验性选项，不保证性能表现。
 style_liquid_note=液态玻璃模式下，截图和录屏中不会显示灵动岛。
 liquid_glass_compat_capture=兼容模式（截图与录屏可见）
 liquid_glass_compat_capture_note=兼容模式下截图、录屏和远程桌面能灵动岛可见;但会增加背景延迟与CPU占用。
+audio_outputs_empty=未找到输出设备
 font_family=字体
 font_system_default=系统默认
 font_from_file=从文件选择…

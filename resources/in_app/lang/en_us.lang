@@ -141,6 +141,7 @@ liquid_glass_siri_note=Experimental option; performance is not guaranteed.
 style_liquid_note=Liquid Glass hides the island from screenshots and screen recordings.
 liquid_glass_compat_capture=Compatibility mode (visible in captures)
 liquid_glass_compat_capture_note=In compatibility mode the island is visible in screenshots, recordings, and remote desktop, but background latency and CPU usage increase.
+audio_outputs_empty=No output devices
 font_family=Font
 font_system_default=System Default
 font_from_file=Choose File…

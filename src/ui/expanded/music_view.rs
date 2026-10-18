@@ -1,7 +1,16 @@
 #![allow(deprecated)]
+mod audio_controls;
 mod controls;
 mod palette;
 mod visualizer;
+
+pub use audio_controls::{
+    AudioPanel, audio_controls_animating, audio_panel, begin_output_scroll_drag,
+    close_audio_panel_soon, drag_output_scroll, end_output_scroll_drag, output_button_rect,
+    output_list_rect, output_row_at, output_scroll_dragging, scroll_output_list, set_audio_pointer,
+    set_audio_state, set_volume_dragging, step_volume, toggle_audio_panel, volume_bar_rect,
+    volume_button_rect, volume_level_at,
+};
 
 pub use controls::{
     get_cover_rect, get_next_btn_rect, get_pause_btn_rect, get_prev_btn_rect,
@@ -29,6 +38,9 @@ use winisland_core::physics::Spring;
 
 const CONTENT_PADDING: f32 = 24.0;
 const COVER_SIZE: f32 = 64.0;
+const COVER_RADIUS: f32 = 13.0;
+const SECONDARY_TEXT_ALPHA: f32 = 0.55;
+const OUTPUT_CHECK_COLOR: Rgba = Rgba::from_rgb(10, 132, 255);
 const TRACK_TEXT_GAP: f32 = 18.0;
 const TRACK_TEXT_RIGHT_INSET: f32 = 70.0;
 const TRACK_TITLE_BASELINE_OFFSET: f32 = 26.0;
@@ -47,10 +59,10 @@ const PROGRESS_BAR_HOVER_GROWTH: f32 = 3.5;
 const PROGRESS_FILL_IDLE_BRIGHTNESS: f32 = 0.72;
 const PROGRESS_FILL_BRIGHTEN_DELAY: f32 = 0.18;
 const PROGRESS_TIME_BASELINE_SCALE: f32 = 0.35;
-const PROGRESS_TIME_IDLE_ALPHA: f32 = 0.5;
-const PROGRESS_TRACK_ALPHA: f32 = 0.12;
+const PROGRESS_TIME_IDLE_ALPHA: f32 = 0.55;
+const PROGRESS_TRACK_ALPHA: f32 = 0.2;
 const PLAYBACK_CONTROLS_TOP_GAP: f32 = 42.0;
-const SKIP_BUTTON_GAP: f32 = 75.0;
+const SKIP_BUTTON_GAP: f32 = 69.0;
 const SKIP_ANIMATION_DURATION_SECS: f32 = 0.5;
 const PLAY_STATE_RESPONSE: f32 = 0.18;
 pub(super) const PAUSE_CONTROL_PRESS_VELOCITY: f32 = -0.18;
@@ -249,6 +261,9 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
         spectrum_fill,
     } = params;
 
+    let (outputs_t, volume_t) = audio_controls::tick(dt, expansion_progress, ox, oy, w, scale);
+    let page_alpha = alpha;
+    let alpha = (page_alpha as f32 * (1.0 - outputs_t)).round() as u8;
     let base_img_size = COVER_SIZE * scale;
     let (img_size, img_x, img_y) = (
         base_img_size,
@@ -368,7 +383,8 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
 
         let time_alpha_factor =
             PROGRESS_TIME_IDLE_ALPHA + (1.0 - PROGRESS_TIME_IDLE_ALPHA) * hover_t;
-        let time_color = text_color.with_alpha((alpha as f32 * time_alpha_factor) as u8);
+        let progress_alpha = (alpha as f32 * (1.0 - volume_t)).round() as u8;
+        let time_color = text_color.with_alpha((progress_alpha as f32 * time_alpha_factor) as u8);
 
         PROGRESS_TEXT_CACHE.with(|cell| {
             let mut cache = cell.borrow_mut();
@@ -413,7 +429,8 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
             });
         });
 
-        let track_color = text_color.with_alpha((alpha as f32 * PROGRESS_TRACK_ALPHA) as u8);
+        let track_color =
+            text_color.with_alpha((progress_alpha as f32 * PROGRESS_TRACK_ALPHA) as u8);
         let track_rect = Rect::from_xywh(bar_left, bar_center_y - bar_h / 2.0, bar_total_w, bar_h);
         painter.fill_round_rect(track_rect, Radius::uniform(bar_radius), track_color);
 
@@ -425,7 +442,7 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
         let fill_brightness =
             PROGRESS_FILL_IDLE_BRIGHTNESS + (1.0 - PROGRESS_FILL_IDLE_BRIGHTNESS) * fill_hover_t;
         let fill_color = Rgba::from_argb(
-            alpha,
+            progress_alpha,
             (text_color.r() as f32 * fill_brightness).round() as u8,
             (text_color.g() as f32 * fill_brightness).round() as u8,
             (text_color.b() as f32 * fill_brightness).round() as u8,
@@ -445,8 +462,39 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
             painter.restore();
         }
 
+        let lanes = audio_controls::lanes(ox, oy, w, scale);
+        audio_controls::draw_volume_row(audio_controls::VolumeRowParams {
+            painter,
+            lanes: &lanes,
+            bar_h,
+            scale,
+            alpha: (alpha as f32 * volume_t).round() as u8,
+            text_color,
+            track_color: text_color
+                .with_alpha((alpha as f32 * volume_t * PROGRESS_TRACK_ALPHA) as u8),
+        });
+        audio_controls::draw_output_list(audio_controls::OutputListParams {
+            painter,
+            ox,
+            oy,
+            w,
+            scale,
+            alpha: (page_alpha as f32 * outputs_t).round() as u8,
+            text_color,
+            accent: OUTPUT_CHECK_COLOR,
+        });
+        audio_controls::draw_side_buttons(audio_controls::SideButtonsParams {
+            painter,
+            ox,
+            oy,
+            w,
+            scale,
+            alpha: page_alpha,
+            text_color,
+        });
+
         let btn_cx = ox + w / 2.0;
-        let btn_cy = bar_center_y + bar_h / 2.0 + PLAYBACK_CONTROLS_TOP_GAP * scale;
+        let btn_cy = lanes.controls_y;
         let skip_gap = SKIP_BUTTON_GAP * scale;
 
         let prev_t = PREV_SKIP_ANIM.with(|cell| {
@@ -473,7 +521,7 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
                 btn_cy,
                 true,
                 prev_t,
-                alpha,
+                page_alpha,
                 scale,
                 use_blur,
                 text_color,
@@ -484,7 +532,7 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
             != 0
         {
             draw_pause_control(
-                painter, btn_cx, btn_cy, pause_t, alpha, scale, use_blur, dt, text_color,
+                painter, btn_cx, btn_cy, pause_t, page_alpha, scale, use_blur, dt, text_color,
             );
         }
 
@@ -510,7 +558,7 @@ pub fn draw_music_page(params: DrawMusicPageParams<'_>) {
                 btn_cy,
                 false,
                 next_t,
-                alpha,
+                page_alpha,
                 scale,
                 use_blur,
                 text_color,
@@ -652,7 +700,7 @@ fn draw_cover(params: CoverParams) -> f32 {
 
     painter.clip_path(&Path::continuous_rounded_rect(
         Rect::from_xywh(img_x, img_y, img_size, img_size),
-        16.0 * scale,
+        COVER_RADIUS * scale,
     ));
     if let Some(img) = cover_img {
         let final_alpha = (alpha as f32 * cover_brightness) / 255.0;
@@ -784,7 +832,7 @@ fn draw_track_text(params: TrackTextParams) {
             max_w: max_text_w,
             size: artist_font_size,
             style: artist_style,
-            color: text_color_sec.with_alpha((alpha as f32 * 0.6) as u8),
+            color: text_color_sec.with_alpha((alpha as f32 * SECONDARY_TEXT_ALPHA) as u8),
             blur: None,
             scale,
             render_as_paths: true,

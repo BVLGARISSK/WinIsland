@@ -21,6 +21,49 @@ pub(super) enum InputSource {
 }
 
 impl App {
+    fn handle_audio_controls_press(&mut self, ox: f32, oy: f32, w: f32, cx: f32, cy: f32) -> bool {
+        use crate::ui::expanded::music_view::{self, AudioPanel};
+        let scale = self.config.expanded_scale;
+        let point = winisland_render::Point::new(cx, cy);
+        let panel = music_view::audio_panel();
+        if panel == AudioPanel::Outputs {
+            if music_view::begin_output_scroll_drag(ox, oy, w, scale, point) {
+                return true;
+            }
+            if let Some(id) = music_view::output_row_at(ox, oy, w, scale, point) {
+                self.audio_outputs.select(&id);
+                music_view::close_audio_panel_soon();
+                return true;
+            }
+            if music_view::output_list_rect(ox, oy, w, scale).contains(point) {
+                return true;
+            }
+        }
+        if music_view::output_button_rect(ox, oy, w, scale).contains(point) {
+            if panel != AudioPanel::Outputs {
+                self.audio_outputs.refresh();
+            }
+            music_view::toggle_audio_panel(AudioPanel::Outputs);
+            return true;
+        }
+        if music_view::volume_button_rect(ox, oy, w, scale).contains(point) {
+            if self.compact_overlay.volume_level().is_some() {
+                music_view::toggle_audio_panel(AudioPanel::Volume);
+            }
+            return true;
+        }
+        if panel == AudioPanel::Volume
+            && music_view::volume_bar_rect(ox, oy, w, scale).contains(point)
+        {
+            let level = music_view::volume_level_at(ox, oy, w, scale, cx);
+            self.compact_overlay.set_volume_level(level);
+            music_view::set_volume_dragging(true);
+            self.volume_dragging = true;
+            return true;
+        }
+        false
+    }
+
     pub(super) fn handle_input(
         &mut self,
         state: InputState,
@@ -246,6 +289,17 @@ impl App {
                     && (self.plugin_media_source.is_some() || self.config.smtc_enabled);
                 let cx = rel_x as f32 - self.page_translation(ExpandedPage::Music);
                 let cy = rel_y as f32;
+                if music_on
+                    && self.handle_audio_controls_press(
+                        offset_x as f32,
+                        island_y as f32,
+                        w as f32,
+                        cx,
+                        cy,
+                    )
+                {
+                    return;
+                }
                 let (cover_x, cover_y, cover_w, cover_h) =
                     get_cover_rect(offset_x as f32, island_y as f32, self.config.expanded_scale);
                 if music_on

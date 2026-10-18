@@ -141,6 +141,7 @@ liquid_glass_siri_note=Opción experimental; no se garantiza el rendimiento.
 style_liquid_note=El Vidrio Líquido oculta la isla en capturas y grabaciones de pantalla.
 liquid_glass_compat_capture=Modo de compatibilidad (visible en capturas)
 liquid_glass_compat_capture_note=En el modo de compatibilidad la isla es visible en capturas, grabaciones y escritorio remoto, pero aumentan la latencia del fondo y el uso de CPU.
+audio_outputs_empty=No hay dispositivos de salida
 font_family=Fuente
 font_system_default=Predeterminada del sistema
 font_from_file=Elegir archivo…

@@ -208,6 +208,7 @@ impl App {
         }
 
         self.update_seeking_input(&window, rel_x);
+        self.update_audio_controls(&window, rel_x, rel_y, offset_x, island_y);
         self.update_progress_hover(rel_x, rel_y, offset_x, island_y, music_active);
         self.update_pager_hover(&window, rel_x, rel_y, &layout, !interaction_suppressed, dt);
         self.update_hide_drag(&window, px, py, dt);
@@ -244,6 +245,8 @@ impl App {
             || self.is_dragging
             || self.is_right_dragging
             || self.seek.active
+            || self.volume_dragging
+            || crate::ui::expanded::music_view::output_scroll_dragging()
             || self.compact_overlay.is_volume_dragging()
             || self.compact_overlay.is_brightness_dragging()
             || plugin_captured
@@ -771,6 +774,66 @@ impl App {
         }
     }
 
+    fn update_audio_controls(
+        &mut self,
+        window: &WindowRef,
+        rel_x: i32,
+        rel_y: i32,
+        offset_x: f64,
+        island_y: f64,
+    ) {
+        use crate::ui::expanded::music_view;
+        let revision = self.audio_outputs.revision();
+        let devices = (revision != self.audio_outputs_revision).then(|| {
+            self.audio_outputs_revision = revision;
+            self.audio_outputs.devices()
+        });
+        music_view::set_audio_state(devices, self.compact_overlay.volume_level());
+        let on_music = self.expanded && self.page_focused(ExpandedPage::Music);
+        if on_music
+            && self
+                .audio_outputs_refreshed
+                .is_none_or(|refreshed| refreshed.elapsed() >= Duration::from_secs(3))
+        {
+            self.audio_outputs_refreshed = Some(Instant::now());
+            self.audio_outputs.refresh();
+        }
+        let cx = rel_x as f32 - self.page_translation(ExpandedPage::Music);
+        music_view::set_audio_pointer(
+            on_music.then(|| winisland_render::Point::new(cx, rel_y as f32)),
+        );
+        if self.volume_dragging {
+            if on_music && self.input_pressed() {
+                let level = music_view::volume_level_at(
+                    offset_x as f32,
+                    island_y as f32,
+                    self.springs.w.value,
+                    self.config.expanded_scale,
+                    cx,
+                );
+                self.compact_overlay.set_volume_level(level);
+            } else {
+                self.volume_dragging = false;
+                music_view::set_volume_dragging(false);
+            }
+            window.request_redraw();
+        }
+        if music_view::output_scroll_dragging() {
+            if on_music && self.input_pressed() {
+                music_view::drag_output_scroll(
+                    offset_x as f32,
+                    island_y as f32,
+                    self.springs.w.value,
+                    self.config.expanded_scale,
+                    rel_y as f32,
+                );
+            } else {
+                music_view::end_output_scroll_drag();
+            }
+            window.request_redraw();
+        }
+    }
+
     fn update_progress_hover(
         &self,
         rel_x: i32,
@@ -1123,6 +1186,8 @@ impl App {
             || self.compact_overlay.is_volume_dragging()
             || self.compact_overlay.is_brightness_dragging()
             || self.lyrics.transition < 1.0
+            || self.volume_dragging
+            || crate::ui::expanded::music_view::audio_controls_animating()
             || self.is_dragging
             || self.seek.active
             || self.is_right_dragging;
