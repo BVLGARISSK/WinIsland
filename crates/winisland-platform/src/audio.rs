@@ -1,4 +1,4 @@
-use crate::{PlatformError, VolumeCommand, VolumeState};
+use crate::{AudioOutputDevice, PlatformError, VolumeCommand, VolumeState};
 
 /// Device-scoped meter. Use on an audio worker; calls return empty or zero when unavailable.
 pub trait AudioMeter {
@@ -60,4 +60,8 @@ pub trait AudioProvider {
     fn toggle_mute(&self) -> Result<(), PlatformError>;
     /// Polls for a default device change, or returns a subscription error.
     fn poll_device_events(&self) -> Result<bool, PlatformError>;
+    /// Lists active playback devices, marking the default one.
+    fn output_devices(&self) -> Result<Vec<AudioOutputDevice>, PlatformError>;
+    /// Makes `id` the default playback device for every role.
+    fn set_default_output(&self, id: &str) -> Result<(), PlatformError>;
 }

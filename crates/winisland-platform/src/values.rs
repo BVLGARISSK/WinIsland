@@ -256,6 +256,21 @@ pub struct VolumeState {
     pub muted: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioOutputKind {
+    Speakers,
+    Headphones,
+    Display,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioOutputDevice {
+    pub id: String,
+    pub name: String,
+    pub kind: AudioOutputKind,
+    pub is_default: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum VolumeCommand {
     StepUp,
