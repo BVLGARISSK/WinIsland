@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
@@ -6,15 +8,16 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
-use windows::Win32::Graphics::Gdi::InvalidateRect;
+use windows::Win32::Graphics::Gdi::{HRGN, InvalidateRect};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
 };
 use windows::Win32::UI::Magnification::{
-    MAGTRANSFORM, MW_FILTERMODE_EXCLUDE, MagInitialize, MagSetWindowFilterList, MagSetWindowSource,
-    MagSetWindowTransform, MagUninitialize, WC_MAGNIFIERW,
+    MAGIMAGEHEADER, MAGTRANSFORM, MW_FILTERMODE_EXCLUDE, MagInitialize, MagSetImageScalingCallback,
+    MagSetWindowFilterList, MagSetWindowSource, MagSetWindowTransform, MagUninitialize,
+    WC_MAGNIFIERW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
@@ -27,14 +30,31 @@ use windows::core::{BOOL, PCWSTR, w};
 
 const FILTER_REFRESH: Duration = Duration::from_millis(500);
 
+/// One frame from the magnifier image callback as tightly packed BGRA rows (the header reports
+/// RGBA, but the bytes are BGRA).
+pub(super) struct PixelFrame {
+    pub(super) pixels: Vec<u8>,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) origin: (i32, i32),
+}
+
+pub(super) type FrameSink = Box<dyn Fn(PixelFrame) + Send>;
+
+thread_local! {
+    static SINK: RefCell<Option<(FrameSink, (i32, i32))>> = const { RefCell::new(None) };
+}
+
 struct State {
     source: Mutex<RECT>,
     rate_hz: AtomicU32,
     stop: AtomicBool,
 }
 
-/// Cloaked magnifier window that DWM fills with the desktop beneath `source`, without this
-/// process's windows; Windows.Graphics.Capture reads it as an ordinary window.
+/// Magnifier that renders the desktop beneath `source` without this process's windows. With a
+/// sink, frames arrive through the image callback from a hidden host, which works where
+/// Windows.Graphics.Capture cannot read cloaked windows (Windows 10); otherwise the host is
+/// cloaked and captured as an ordinary window.
 pub(super) struct Magnifier {
     state: Arc<State>,
     host: HWND,
@@ -42,7 +62,11 @@ pub(super) struct Magnifier {
 }
 
 impl Magnifier {
-    pub(super) fn start(source: RECT, rate_hz: u32) -> Result<Self, String> {
+    pub(super) fn start(
+        source: RECT,
+        rate_hz: u32,
+        sink: Option<FrameSink>,
+    ) -> Result<Self, String> {
         let state = Arc::new(State {
             source: Mutex::new(source),
             rate_hz: AtomicU32::new(rate_hz.max(1)),
@@ -52,7 +76,7 @@ impl Magnifier {
         let thread_state = state.clone();
         let thread = std::thread::Builder::new()
             .name("liquid-magnifier".into())
-            .spawn(move || run(thread_state, sender))
+            .spawn(move || run(thread_state, sender, sink))
             .map_err(|error| format!("Magnifier thread failed: {error}"))?;
         match receiver.recv() {
             Ok(Ok(host)) => Ok(Self {
@@ -98,7 +122,59 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-fn run(state: Arc<State>, ready: std::sync::mpsc::Sender<Result<isize, String>>) {
+unsafe extern "system" fn on_frame(
+    _hwnd: HWND,
+    source: *mut c_void,
+    header: MAGIMAGEHEADER,
+    _destination: *mut c_void,
+    _destination_header: MAGIMAGEHEADER,
+    _unclipped: RECT,
+    _clipped: RECT,
+    _dirty: HRGN,
+) -> BOOL {
+    let row = header.width as usize * 4;
+    let stride = header.stride as usize;
+    let height = header.height as usize;
+    let end = (header.offset as usize)
+        .saturating_add(stride.saturating_mul(height.saturating_sub(1)))
+        .saturating_add(row);
+    if source.is_null() || row == 0 || height == 0 || stride < row || end > header.cbSize {
+        return BOOL(1);
+    }
+    SINK.with(|slot| {
+        let slot = slot.borrow();
+        let Some((sink, origin)) = slot.as_ref() else {
+            return;
+        };
+        let mut pixels = Vec::with_capacity(row * header.height as usize);
+        for y in 0..header.height as usize {
+            // SAFETY: The magnifier guarantees `height` rows of `stride` bytes after `offset`, and
+            // each copied row stays within its stride.
+            pixels.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(
+                    source
+                        .cast::<u8>()
+                        .add(header.offset as usize + y * header.stride as usize),
+                    row,
+                )
+            });
+        }
+        sink(PixelFrame {
+            pixels,
+            width: header.width,
+            height: header.height,
+            origin: *origin,
+        });
+    });
+    BOOL(1)
+}
+
+fn run(
+    state: Arc<State>,
+    ready: std::sync::mpsc::Sender<Result<isize, String>>,
+    sink: Option<FrameSink>,
+) {
+    let callback = sink.is_some();
     // SAFETY: Every handle below is created, used, and destroyed on this thread; the magnifier
     // runtime is initialized before the control is created and released after it is destroyed.
     unsafe {
@@ -121,7 +197,11 @@ fn run(state: Arc<State>, ready: std::sync::mpsc::Sender<Result<isize, String>>)
                 WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 class,
                 w!("WinIsland Liquid Backdrop"),
-                WS_POPUP | WS_VISIBLE,
+                if callback {
+                    WS_POPUP
+                } else {
+                    WS_POPUP | WS_VISIBLE
+                },
                 source.left,
                 source.top,
                 (source.right - source.left).max(1),
@@ -133,13 +213,15 @@ fn run(state: Arc<State>, ready: std::sync::mpsc::Sender<Result<isize, String>>)
             )
             .map_err(|error| format!("Magnifier host failed: {error}"))?;
             let _ = SetLayeredWindowAttributes(host, COLORREF(0), 255, LWA_ALPHA);
-            let cloak = 1_i32;
-            let _ = DwmSetWindowAttribute(
-                host,
-                DWMWA_CLOAK,
-                (&cloak as *const i32).cast(),
-                size_of::<i32>() as u32,
-            );
+            if !callback {
+                let cloak = 1_i32;
+                let _ = DwmSetWindowAttribute(
+                    host,
+                    DWMWA_CLOAK,
+                    (&cloak as *const i32).cast(),
+                    size_of::<i32>() as u32,
+                );
+            }
             let magnifier = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 PCWSTR(WC_MAGNIFIERW.as_ptr()),
@@ -173,6 +255,11 @@ fn run(state: Arc<State>, ready: std::sync::mpsc::Sender<Result<isize, String>>)
                 return;
             }
         };
+        if let Some(sink) = sink {
+            let source = *state.source.lock();
+            SINK.with(|slot| *slot.borrow_mut() = Some((sink, (source.left, source.top))));
+            let _ = MagSetImageScalingCallback(magnifier, Some(on_frame));
+        }
         let mut excluded = own_windows();
         let mut filter_ok = apply_filter(magnifier, &excluded, true);
         let _ = ready.send(Ok(host.0 as isize));
@@ -214,6 +301,11 @@ fn run(state: Arc<State>, ready: std::sync::mpsc::Sender<Result<isize, String>>)
                 excluded = windows;
                 filter_ok = apply_filter(magnifier, &excluded, filter_ok);
             }
+            SINK.with(|slot| {
+                if let Some((_, origin)) = slot.borrow_mut().as_mut() {
+                    *origin = (source.left, source.top);
+                }
+            });
             let _ = MagSetWindowSource(magnifier, source);
             let _ = InvalidateRect(Some(magnifier), None, false);
             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
@@ -231,6 +323,7 @@ fn run(state: Arc<State>, ready: std::sync::mpsc::Sender<Result<isize, String>>)
         }
         let _ = DestroyWindow(host);
         let _ = MagUninitialize();
+        SINK.with(|slot| slot.borrow_mut().take());
     }
 }
 

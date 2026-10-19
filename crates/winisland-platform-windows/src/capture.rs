@@ -23,8 +23,8 @@ use windows::{
             Direct3D11::{
                 D3D11_BOX, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
-                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, D3D11CreateDevice,
-                ID3D11Device, ID3D11Device1, ID3D11Device5, ID3D11DeviceContext,
+                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+                D3D11CreateDevice, ID3D11Device, ID3D11Device1, ID3D11Device5, ID3D11DeviceContext,
                 ID3D11DeviceContext4, ID3D11Fence, ID3D11Multithread, ID3D11Texture2D,
             },
             Dxgi::{
@@ -49,6 +49,7 @@ use windows::{
 use winisland_platform::{BackdropCaptureFrame, BackdropCaptureRequest, BackdropShare, Rect};
 
 const FRAME_BUFFERS: i32 = 2;
+const PIXEL_RATE_LIMIT: u32 = 60;
 const PROBE_STEP: usize = 2;
 const PROBE_ALIGN: u32 = 64;
 const BORDER_UNKNOWN: u8 = 0;
@@ -58,9 +59,15 @@ const BORDER_REQUIRED: u8 = 3;
 
 static BORDER_ACCESS: AtomicU8 = AtomicU8::new(BORDER_UNKNOWN);
 
+#[derive(Clone)]
+enum Frame {
+    Window(Direct3D11CaptureFrame),
+    Pixels(Arc<magnifier::PixelFrame>),
+}
+
 #[derive(Default)]
 struct Latest {
-    frame: Option<Direct3D11CaptureFrame>,
+    frame: Option<Frame>,
     sequence: u64,
 }
 
@@ -105,6 +112,9 @@ struct Import {
 pub(crate) struct BackdropCapture {
     hwnd: HWND,
     magnifier_mode: Cell<bool>,
+    pixel_mode: Cell<bool>,
+    pixels: RefCell<Option<magnifier::Magnifier>>,
+    upload: RefCell<Option<(ID3D11Texture2D, u32, u32)>>,
     device: ID3D11Device5,
     context: ID3D11DeviceContext4,
     shared: Arc<Shared>,
@@ -133,14 +143,18 @@ impl BackdropCapture {
         let winrt_device: IDirect3DDevice = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi) }
             .and_then(|device| device.cast())
             .map_err(|error| format!("WinRT Direct3D device creation failed: {error}"))?;
-        let magnifier_mode = visible_to_capture;
-        if !magnifier_mode {
-            exclude_from_capture(hwnd)?;
+        let mut magnifier_mode = visible_to_capture;
+        if !magnifier_mode && let Err(error) = exclude_from_capture(hwnd) {
+            log::warn!("{error}; the liquid glass backdrop uses the magnifier instead");
+            magnifier_mode = true;
         }
         let d3d = AgileContext(device.clone().into(), context.clone().into());
         let capture = Self {
             hwnd,
             magnifier_mode: Cell::new(magnifier_mode),
+            pixel_mode: Cell::new(false),
+            pixels: RefCell::new(None),
+            upload: RefCell::new(None),
             device,
             context,
             shared: Arc::new(Shared {
@@ -172,20 +186,30 @@ impl BackdropCapture {
             log::warn!("Backdrop capture restart failed: {error}");
             return None;
         }
-        let origin = self.session.borrow().as_ref()?.origin.get();
-        let interest = Rect {
-            left: request.interest.left - origin.0,
-            top: request.interest.top - origin.1,
-            right: request.interest.right - origin.0,
-            bottom: request.interest.bottom - origin.1,
-        };
-        *self.shared.interest.lock() = interest;
+        let session_origin = self
+            .session
+            .borrow()
+            .as_ref()
+            .map(|session| session.origin.get());
+        if let Some(origin) = session_origin {
+            *self.shared.interest.lock() = relative(request.interest, origin);
+        }
+        if let Some(magnifier) = self.pixels.borrow().as_ref()
+            && let Some(source) = monitor_clamped(self.hwnd, request.interest)
+        {
+            magnifier.set_source(source);
+        }
         self.shared.pending.store(false, Ordering::Release);
         self.ensure_import(request.share)?;
         let (frame, sequence) = {
             let latest = self.shared.latest.lock();
             (latest.frame.clone()?, latest.sequence)
         };
+        let origin = match &frame {
+            Frame::Pixels(pixels) => pixels.origin,
+            Frame::Window(_) => session_origin?,
+        };
+        let interest = relative(request.interest, origin);
         let key = (
             request.share.generation,
             sequence,
@@ -207,14 +231,22 @@ impl BackdropCapture {
 
     fn copy(
         &self,
-        frame: &Direct3D11CaptureFrame,
+        frame: &Frame,
         request: BackdropCaptureRequest,
         key: (u64, u64, i32, i32),
     ) -> Option<()> {
         let import = self.import.borrow();
         let import = import.as_ref()?;
-        let source = frame_texture(frame).ok()?;
-        let content = frame.ContentSize().ok()?;
+        let (source, content) = match frame {
+            Frame::Window(frame) => (frame_texture(frame).ok()?, frame.ContentSize().ok()?),
+            Frame::Pixels(pixels) => (
+                self.upload_pixels(pixels)?,
+                SizeInt32 {
+                    Width: pixels.width as i32,
+                    Height: pixels.height as i32,
+                },
+            ),
+        };
         let (local_x, local_y) = (key.2, key.3);
         let left = local_x.max(0);
         let top = local_y.max(0);
@@ -267,6 +299,59 @@ impl BackdropCapture {
         Some(())
     }
 
+    fn upload_pixels(&self, pixels: &magnifier::PixelFrame) -> Option<ID3D11Texture2D> {
+        if self
+            .upload
+            .borrow()
+            .as_ref()
+            .is_none_or(|(_, width, height)| *width < pixels.width || *height < pixels.height)
+        {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: pixels.width.max(1),
+                Height: pixels.height.max(1),
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                ..Default::default()
+            };
+            let mut texture = None;
+            // SAFETY: The descriptor is initialized and the output Option is owned by this call.
+            if let Err(error) =
+                unsafe { self.device.CreateTexture2D(&desc, None, Some(&mut texture)) }
+            {
+                log::warn!("Backdrop upload texture failed: {error}");
+                return None;
+            }
+            *self.upload.borrow_mut() = Some((texture?, desc.Width, desc.Height));
+        }
+        let texture = self.upload.borrow().as_ref()?.0.clone();
+        let region = D3D11_BOX {
+            left: 0,
+            top: 0,
+            front: 0,
+            right: pixels.width,
+            bottom: pixels.height,
+            back: 1,
+        };
+        // SAFETY: The box fits the texture and `pixels` holds `height` rows of `width` BGRA texels.
+        unsafe {
+            self.context.UpdateSubresource(
+                &texture,
+                0,
+                Some(&region),
+                pixels.pixels.as_ptr().cast(),
+                pixels.width * 4,
+                0,
+            );
+        }
+        Some(texture)
+    }
+
     fn ensure_import(&self, share: BackdropShare) -> Option<()> {
         if self
             .import
@@ -317,6 +402,9 @@ impl BackdropCapture {
     }
 
     fn ensure_session(&self, rate_hz: u32) -> Result<(), String> {
+        if self.pixel_mode.get() {
+            return self.ensure_pixel_session(rate_hz);
+        }
         if self.magnifier_mode.get() {
             match self.ensure_magnifier_session(rate_hz) {
                 Ok(()) => return Ok(()),
@@ -383,12 +471,21 @@ impl BackdropCapture {
         self.session.borrow_mut().take();
         *self.shared.latest.lock() = Latest::default();
         self.copied.set(None);
-        let magnifier = magnifier::Magnifier::start(rect, rate_hz)?;
+        let magnifier = magnifier::Magnifier::start(rect, rate_hz, None)?;
         let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
             .map_err(|error| format!("Capture interop is unavailable: {error}"))?;
         // SAFETY: The magnifier host is a live window owned by this process.
-        let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(magnifier.host()) }
-            .map_err(|error| format!("Magnifier capture item failed: {error}"))?;
+        let item: GraphicsCaptureItem = match unsafe { interop.CreateForWindow(magnifier.host()) } {
+            Ok(item) => item,
+            Err(error) => {
+                log::info!(
+                    "Magnifier window capture is unavailable ({error}); reading magnifier frames directly"
+                );
+                drop(magnifier);
+                self.pixel_mode.set(true);
+                return self.ensure_pixel_session(rate_hz);
+            }
+        };
         // SAFETY: hwnd is the live overlay window; the call only reads its placement.
         let monitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
         let session = Session::open(
@@ -401,6 +498,28 @@ impl BackdropCapture {
         )?;
         session.source.set(source);
         *self.session.borrow_mut() = Some(session);
+        Ok(())
+    }
+}
+
+impl BackdropCapture {
+    fn ensure_pixel_session(&self, rate_hz: u32) -> Result<(), String> {
+        let rate_hz = rate_hz.min(PIXEL_RATE_LIMIT);
+        if let Some(magnifier) = self.pixels.borrow().as_ref() {
+            magnifier.set_rate(rate_hz);
+            return Ok(());
+        }
+        self.session.borrow_mut().take();
+        *self.shared.latest.lock() = Latest::default();
+        self.copied.set(None);
+        let weak = Arc::downgrade(&self.shared);
+        let sink: magnifier::FrameSink = Box::new(move |frame| {
+            if let Some(shared) = weak.upgrade() {
+                shared.receive_pixels(frame);
+            }
+        });
+        let magnifier = magnifier::Magnifier::start(window_rect(self.hwnd)?, rate_hz, Some(sink))?;
+        *self.pixels.borrow_mut() = Some(magnifier);
         Ok(())
     }
 }
@@ -499,6 +618,25 @@ impl Drop for Session {
 }
 
 impl Shared {
+    fn receive_pixels(&self, frame: magnifier::PixelFrame) {
+        {
+            let mut latest = self.latest.lock();
+            if let Some(Frame::Pixels(previous)) = latest.frame.as_ref()
+                && previous.origin == frame.origin
+                && previous.width == frame.width
+                && previous.height == frame.height
+                && previous.pixels == frame.pixels
+            {
+                return;
+            }
+            latest.frame = Some(Frame::Pixels(Arc::new(frame)));
+            latest.sequence += 1;
+        }
+        if !self.pending.swap(true, Ordering::AcqRel) {
+            crate::window::wake();
+        }
+    }
+
     fn probe_changed(&self, frame: &Direct3D11CaptureFrame, interest: Rect) -> bool {
         let content = *self.content.lock();
         let rect = Rect {
@@ -658,7 +796,7 @@ impl Shared {
             || (unknown && self.probe_changed(&frame, interest));
         {
             let mut latest = self.latest.lock();
-            latest.frame = Some(frame);
+            latest.frame = Some(Frame::Window(frame));
             if relevant {
                 latest.sequence += 1;
             }
@@ -672,6 +810,7 @@ impl Shared {
 impl Drop for BackdropCapture {
     fn drop(&mut self) {
         self.session.borrow_mut().take();
+        self.pixels.borrow_mut().take();
         *self.shared.latest.lock() = Latest::default();
         self.import.borrow_mut().take();
         // SAFETY: hwnd may already be destroyed; the call fails harmlessly in that case.
@@ -837,6 +976,38 @@ fn exclude_from_capture(hwnd: HWND) -> Result<(), String> {
     // SAFETY: hwnd is the caller's live overlay window on this thread.
     unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }
         .map_err(|error| format!("Capture exclusion failed: {error}"))
+}
+
+/// Clips a screen rectangle to the overlay's monitor; the magnifier image callback is only fed
+/// on-screen sources.
+fn monitor_clamped(hwnd: HWND, rect: Rect) -> Option<RECT> {
+    // SAFETY: hwnd is the live overlay window; the call only reads its placement.
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: monitor came from MonitorFromWindow and info is a correctly sized output.
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return None;
+    }
+    let bounds = info.rcMonitor;
+    let clamped = RECT {
+        left: rect.left.max(bounds.left),
+        top: rect.top.max(bounds.top),
+        right: rect.right.min(bounds.right),
+        bottom: rect.bottom.min(bounds.bottom),
+    };
+    (clamped.right > clamped.left && clamped.bottom > clamped.top).then_some(clamped)
+}
+
+fn relative(rect: Rect, origin: (i32, i32)) -> Rect {
+    Rect {
+        left: rect.left - origin.0,
+        top: rect.top - origin.1,
+        right: rect.right - origin.0,
+        bottom: rect.bottom - origin.1,
+    }
 }
 
 fn window_rect(hwnd: HWND) -> Result<RECT, String> {
