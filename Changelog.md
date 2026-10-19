@@ -1,5 +1,22 @@
 # Changelog
 
+### v1.5.3
+- Redesigned the settings window with a translucent sidebar, search, and clearer pages: General, Appearance, Size & Position, Hiding & Interaction, and Notifications & Alerts
+- Added font options: choose any installed font or a font file and adjust the overall weight; regional fonts such as PingFang UI SC/TC follow the interface language automatically
+- Rebalanced font weights across the island and settings, and fixed Chinese text mixing Japanese and Traditional Chinese fallback fonts
+- Restyled the music page with an output device switcher and a volume control
+- Added a timer status orb beside music and widgets in the compact island
+- Added hour, minute, and second adjustment to the timer, with coarse and fine mouse wheel steps
+- Added a Liquid Glass compatibility mode that keeps the island visible in screenshots and recordings
+- Added a default icon for notifications from apps without one
+- Fixed the spectrum freezing after switching the output device
+- Fixed exclusive fullscreen games minimizing during display mode switches
+- Fixed the island jumping to another monitor when hidden on a secondary monitor
+- Fixed the album cover flipping twice when skipping tracks
+- Fixed the island turning black after being swiped hidden
+- Fixed Liquid Glass edges looking transparent and jagged
+- Fixed settings content being clipped after moving between monitors with different scaling
+
 ### v1.5.1
 - Fixed the Liquid Glass screen capture border so the yellow recording outline is hidden on supported Windows installations
 - Added the required Windows borderless capture capability to packaged installers
