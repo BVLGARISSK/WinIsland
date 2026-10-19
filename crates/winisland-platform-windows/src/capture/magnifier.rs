@@ -18,14 +18,14 @@ use windows::Win32::UI::Magnification::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
-    GetWindowThreadProcessId, LWA_ALPHA, MSG, PM_REMOVE, PeekMessageW, RegisterClassW,
-    SWP_NOACTIVATE, SWP_NOZORDER, SetLayeredWindowAttributes, SetWindowPos, TranslateMessage,
-    WINDOW_EX_STYLE, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_POPUP, WS_VISIBLE,
+    GetWindowThreadProcessId, IsWindowVisible, LWA_ALPHA, MSG, PM_REMOVE, PeekMessageW,
+    RegisterClassW, SWP_NOACTIVATE, SWP_NOZORDER, SetLayeredWindowAttributes, SetWindowPos,
+    TranslateMessage, WINDOW_EX_STYLE, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
-const FILTER_REFRESH: Duration = Duration::from_secs(1);
+const FILTER_REFRESH: Duration = Duration::from_millis(500);
 
 struct State {
     source: Mutex<RECT>,
@@ -174,12 +174,13 @@ fn run(state: Arc<State>, ready: std::sync::mpsc::Sender<Result<isize, String>>)
             }
         };
         let mut excluded = own_windows();
-        apply_filter(magnifier, &mut excluded);
+        let mut filter_ok = apply_filter(magnifier, &excluded, true);
         let _ = ready.send(Ok(host.0 as isize));
 
         let mut size = (0, 0);
         let mut next = Instant::now();
         let mut filter_at = Instant::now();
+        let mut refilter = false;
         let mut message = MSG::default();
         while !state.stop.load(Ordering::Acquire) {
             let source = *state.source.lock();
@@ -204,14 +205,14 @@ fn run(state: Arc<State>, ready: std::sync::mpsc::Sender<Result<isize, String>>)
                     size.1,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
+                refilter = true;
             }
-            if filter_at.elapsed() >= FILTER_REFRESH {
+            let windows = own_windows();
+            if refilter || windows != excluded || filter_at.elapsed() >= FILTER_REFRESH {
+                refilter = false;
                 filter_at = Instant::now();
-                let mut windows = own_windows();
-                if windows != excluded {
-                    excluded = windows.clone();
-                    apply_filter(magnifier, &mut windows);
-                }
+                excluded = windows;
+                filter_ok = apply_filter(magnifier, &excluded, filter_ok);
             }
             let _ = MagSetWindowSource(magnifier, source);
             let _ = InvalidateRect(Some(magnifier), None, false);
@@ -233,30 +234,39 @@ fn run(state: Arc<State>, ready: std::sync::mpsc::Sender<Result<isize, String>>)
     }
 }
 
-fn apply_filter(magnifier: HWND, windows: &mut [HWND]) {
-    if windows.is_empty() {
-        return;
+/// Re-sends the exclusion list. DWM can drop a window's exclusion when it is hidden and shown
+/// again or when the magnifier resizes, so this runs on every change and on a timer. Returns
+/// whether the call succeeded and warns once when it starts failing.
+fn apply_filter(magnifier: HWND, windows: &[(HWND, bool)], was_ok: bool) -> bool {
+    let mut handles: Vec<HWND> = windows.iter().map(|(hwnd, _)| *hwnd).collect();
+    if handles.is_empty() {
+        return was_ok;
     }
     // SAFETY: The magnifier control is live on this thread and the list outlives the call.
-    unsafe {
-        let _ = MagSetWindowFilterList(
+    let ok = unsafe {
+        MagSetWindowFilterList(
             magnifier,
             MW_FILTERMODE_EXCLUDE,
-            windows.len() as i32,
-            windows.as_mut_ptr(),
-        );
+            handles.len() as i32,
+            handles.as_mut_ptr(),
+        )
     }
+    .as_bool();
+    if was_ok && !ok {
+        log::warn!("Magnifier could not exclude WinIsland windows");
+    }
+    ok
 }
 
-fn own_windows() -> Vec<HWND> {
+fn own_windows() -> Vec<(HWND, bool)> {
     extern "system" fn visit(hwnd: HWND, data: LPARAM) -> BOOL {
         // SAFETY: data points to the Vec owned by own_windows for the duration of EnumWindows.
         unsafe {
-            let windows = &mut *(data.0 as *mut Vec<HWND>);
+            let windows = &mut *(data.0 as *mut Vec<(HWND, bool)>);
             let mut process = 0;
             GetWindowThreadProcessId(hwnd, Some(&mut process));
             if process == GetCurrentProcessId() {
-                windows.push(hwnd);
+                windows.push((hwnd, IsWindowVisible(hwnd).as_bool()));
             }
         }
         BOOL(1)
@@ -264,7 +274,10 @@ fn own_windows() -> Vec<HWND> {
     let mut windows = Vec::new();
     // SAFETY: The callback only appends to the local Vec passed through LPARAM.
     unsafe {
-        let _ = EnumWindows(Some(visit), LPARAM(&mut windows as *mut Vec<HWND> as isize));
+        let _ = EnumWindows(
+            Some(visit),
+            LPARAM(&mut windows as *mut Vec<(HWND, bool)> as isize),
+        );
     }
     windows
 }
