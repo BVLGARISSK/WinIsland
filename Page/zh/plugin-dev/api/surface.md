@@ -47,8 +47,37 @@ fn create_panel(host: &Host) -> Result<Surface, Error> {
 | `SURFACE_BACKGROUND` | 宿主背景之上、岛内容之下的绘制层。 |
 | `SURFACE_FOREGROUND` | 岛内容之上的绘制层，仍被裁剪在岛内。 |
 | `SURFACE_COMPACT_MAIN` | 从 `0.11.0` 起提供：主紧凑内容，通过 [Activity](/plugin-dev/api/activity) 参与选择；读取 `logical_size()` 获取实际内容尺寸。 |
+| `SURFACE_STATUS` | 从 `0.12.0` 起提供：紧凑岛旁的圆形状态指示，见下文“状态指示”。 |
 
 其他 surface 按 `order`、资源 ID 排序；主紧凑区域则按 Activity 的优先级和更新时间选择。`SurfaceSpecV2` 的宽高须为 0–2048 范围内的有限数值；它们用于初始化资源，不保证是最终布局尺寸。显示后应读取 `logical_size()`。背景和前景层覆盖当前岛的范围，不会创建独立的原生窗口。
+
+## 页面顺序
+
+从 `0.12.0` 起，已启用的 `SURFACE_PAGE` 会与内置页面一起出现在**设置 → 小组件 → 页面**中，用户可以调整顺序或隐藏。宿主按插件 ID 和 surface 键记住每个页面，因此不同版本应保持键不变；列表中显示的名称为 surface 标题。新页面默认显示，并排在末尾。被隐藏的页面仍保持注册，但宿主会在翻页时跳过它，`show_page` 也无法打开它。
+
+## 状态指示
+
+从 `0.12.0` 起，`SURFACE_STATUS` 会在紧凑岛旁绘制一个圆形小指示，位置与计时器的状态小圆球相同。适合在岛缩小时仍需看到的状态，例如未读数量或紧急任务。
+
+- 有内容时设置 `SURFACE_ENABLED` 显示，清除该标记即隐藏；宿主负责出现和消失的动画。
+- 宿主以紧凑岛高度为边长的正方形呈现它。读取 `logical_size()`，在其中的内切圆内绘制，四角会被裁掉。
+- 计时器正在运行且也需要小圆球时，由计时器优先占用，状态 surface 等待。
+- 点击指示会展开灵动岛并打开该插件第一个已启用的展开页（用户已隐藏该页时只展开）；它不使用输入区域。
+- 与其他 surface 相同，仅在可见时收到 `on_tick`。
+
+```rust
+let status = host.surfaces()?.create(SurfaceSpecV2 {
+    key: str_to_fixed("urgent"),
+    title: str_to_fixed("紧急提醒"),
+    kind: SURFACE_STATUS,
+    flags: 0,
+    width: 32.0,
+    height: 32.0,
+    ..Default::default()
+})?;
+```
+
+旧版宿主会以 `InvalidArgument` 拒绝 `SURFACE_STATUS`，应将状态指示视为可选功能。
 
 ## 方法与所有权
 

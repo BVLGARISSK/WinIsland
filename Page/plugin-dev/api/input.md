@@ -53,8 +53,36 @@ Raw calls take `context, token` and return `PluginStatus`. Each target supports 
 | `INPUT_KEYBOARD` | Keyboard focus when clicked; combine with `INPUT_POINTER` |
 | `INPUT_FILES` | Dropped file paths over the region |
 | `INPUT_CAPTURE_ON_PRESS` | Capture from a pointer press until its matching release or cancellation; combine with `INPUT_POINTER` |
+| `INPUT_SCROLL_AT_START` | Since `0.12.0`: on an `INPUT_SCROLL` region, the content cannot scroll further toward its start (up) |
+| `INPUT_SCROLL_AT_END` | Since `0.12.0`: on an `INPUT_SCROLL` region, the content cannot scroll further toward its end (down) |
 
 Hit testing uses the last matching region in the topmost interactive presentation. Regions without an `EVENT_INPUT` subscription do not claim input. Layers are therefore passive until regions and a subscription are supplied. Hidden or transitioning noninteractive targets lose capture and focus. Touch is routed as a single pointer, not a multitouch API.
+
+## Scrolling inside a page
+
+An `INPUT_SCROLL` region normally keeps every wheel event over it, so the user cannot switch pages with the wheel while the pointer is over a scrollable list. Since `0.12.0`, report the list's scroll edges with `INPUT_SCROLL_AT_START` and `INPUT_SCROLL_AT_END`, and the host shares the wheel with the pager:
+
+- While the content can still scroll in the wheel's direction, the plugin receives the event.
+- When a continuous wheel gesture reaches an edge, the remaining events still go to the plugin and the page stays put.
+- A new gesture toward an edge the content has already reached switches pages. Events more than 350 ms apart start a new gesture.
+- Horizontal wheel input over the region always switches pages.
+
+Set both flags when the content fits without scrolling. Clear them as soon as the content can move again, and set them on every region that carries `INPUT_SCROLL`. Update the flags together with the scroll position, preferably from the target position of a smooth scroll rather than the animated one:
+
+```rust
+fn scroll_flags(scroll: f32, max_scroll: f32) -> u32 {
+    let mut flags = INPUT_SCROLL;
+    if scroll <= 0.5 {
+        flags |= INPUT_SCROLL_AT_START;
+    }
+    if scroll >= max_scroll - 0.5 {
+        flags |= INPUT_SCROLL_AT_END;
+    }
+    flags
+}
+```
+
+Hosts older than `0.12.0` reject unknown flags with `InvalidArgument`. To support them, retry `set_regions` with the flags masked to `(1 << 5) - 1`; the region then keeps every wheel event as before.
 
 ## Event payload
 
