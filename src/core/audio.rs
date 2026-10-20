@@ -436,6 +436,7 @@ impl AudioProcessor {
         spawn_worker("audio-fallback-capture", move || {
             let host = cpal::default_host();
             let mut current_device_name = None;
+            let mut announced_device_name = None;
             let mut current_stream: Option<Stream> = None;
             let mut current_stream_failed: Option<Arc<AtomicBool>> = None;
             let mut stream_running = false;
@@ -490,15 +491,18 @@ impl AudioProcessor {
                     continue;
                 }
                 next_device_refresh = now + DEVICE_REFRESH_INTERVAL;
-                let default_device = host.default_output_device();
-                let default_device_name = default_device
-                    .as_ref()
+                let default_device_name = host
+                    .default_output_device()
                     .and_then(|d| d.description().map(|desc| desc.name().to_string()).ok());
 
                 if default_device_name != current_device_name {
-                    log::info!(
-                        "Audio capture: default device changed from {current_device_name:?} to {default_device_name:?}"
-                    );
+                    let announce = default_device_name != announced_device_name;
+                    if announce {
+                        log::info!(
+                            "Audio capture: default device changed from {announced_device_name:?} to {default_device_name:?}"
+                        );
+                        announced_device_name = default_device_name.clone();
+                    }
 
                     // Releasing old stream and session
                     current_stream = None;
@@ -506,16 +510,21 @@ impl AudioProcessor {
                     stream_running = false;
                     current_device_name = None;
 
-                    if let Some(device) = default_device {
+                    if let Some(device) = default_device_name
+                        .as_deref()
+                        .and_then(|name| output_device_named(&host, name))
+                    {
                         let device_name = default_device_name
                             .clone()
                             .unwrap_or_else(|| "unknown".to_string());
                         let config = match device.default_output_config() {
                             Ok(c) => c,
                             Err(e) => {
-                                log::warn!(
-                                    "Audio capture: no default output config for '{device_name}': {e:?}"
-                                );
+                                if announce {
+                                    log::warn!(
+                                        "Audio capture: no default output config for '{device_name}': {e:?}"
+                                    );
+                                }
                                 std::thread::sleep(AUDIO_RETRY_INTERVAL);
                                 continue;
                             }
@@ -692,6 +701,16 @@ where
         },
         None,
     )
+}
+
+/// Resolves the default output to its concrete endpoint, which activates synchronously; the
+/// virtual default device activates asynchronously and can keep failing after a switch.
+fn output_device_named(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
+    host.output_devices().ok()?.find(|device| {
+        device
+            .description()
+            .is_ok_and(|description| description.name() == name)
+    })
 }
 
 fn spawn_worker(name: &str, work: impl FnOnce() + Send + 'static) {
