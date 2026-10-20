@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use crate::ui::expanded::pager::{self, ExpandedPage, PageAvailability, PagerHit, available_pages};
 use crate::utils::mouse::is_point_in_continuous_rounded_rect;
+use winisland_core::config::{PageId, page_order};
 use winisland_platform::MouseWheelDelta;
 use winisland_render::{Point, Rect};
 
@@ -19,29 +20,48 @@ impl App {
                 crate::plugin::calendar::PAGE_KEY,
             )
         });
-        let visible_order: Vec<_> = self
-            .config
-            .expanded_page_order
-            .iter()
-            .copied()
-            .filter(|kind| !self.config.hidden_expanded_pages.contains(kind))
-            .collect();
-        let mut pages = available_pages(
-            &visible_order,
-            &PageAvailability {
-                music: self.music_page_available,
-                calendar,
-            },
+        let availability = PageAvailability {
+            music: self.music_page_available,
+            calendar,
+        };
+        let mut plugin_pages = self
+            .plugin_host
+            .as_ref()
+            .map(|host| host.pages())
+            .unwrap_or_default();
+        plugin_pages.retain(|page| Some(page.id) != calendar);
+        let order = page_order(
+            &self.config.expanded_page_order,
+            &self.config.hidden_expanded_pages,
+            &self.config.plugin_pages,
         );
-        if let Some(host) = &self.plugin_host {
-            pages.extend(
-                host.surfaces()
-                    .into_iter()
-                    .filter(|(_, spec)| spec.kind == winisland_plugin_api::SURFACE_PAGE)
-                    .filter(|(id, _)| Some(*id) != calendar)
-                    .map(|(id, _)| ExpandedPage::Plugin(id)),
-            );
+        let mut pages = Vec::new();
+        for (page, hidden) in &order {
+            match page {
+                PageId::Builtin(kind) if !hidden => {
+                    pages.extend(available_pages(&[*kind], &availability));
+                }
+                PageId::Plugin {
+                    plugin_id,
+                    page_key,
+                } => {
+                    if let Some(index) = plugin_pages.iter().position(|candidate| {
+                        &candidate.plugin_id == plugin_id && &candidate.key == page_key
+                    }) {
+                        let page = plugin_pages.remove(index);
+                        if !hidden {
+                            pages.push(ExpandedPage::Plugin(page.id));
+                        }
+                    }
+                }
+                PageId::Builtin(_) => {}
+            }
         }
+        pages.extend(
+            plugin_pages
+                .iter()
+                .map(|page| ExpandedPage::Plugin(page.id)),
+        );
         if pages.is_empty() {
             pages.push(ExpandedPage::Widgets);
         }

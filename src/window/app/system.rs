@@ -624,7 +624,8 @@ impl App {
                     let page_order_changed = self.config.expanded_page_order
                         != current_config.expanded_page_order
                         || self.config.hidden_expanded_pages
-                            != current_config.hidden_expanded_pages;
+                            != current_config.hidden_expanded_pages
+                        || self.config.plugin_pages != current_config.plugin_pages;
 
                     log::info!("Config changed, reloaded");
                     self.config = current_config;

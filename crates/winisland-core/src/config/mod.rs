@@ -180,6 +180,7 @@ pub struct AppConfig {
     #[educe(Default(expression = default_expanded_page_order()))]
     pub expanded_page_order: Vec<ExpandedPageKind>,
     pub hidden_expanded_pages: Vec<ExpandedPageKind>,
+    pub plugin_pages: Vec<PluginPageSlot>,
     #[educe(Default(expression = default_widget_layout()))]
     pub widget_layout: Vec<WidgetSlot>,
     pub plugin_widget_layout: Vec<PluginWidgetSlot>,
