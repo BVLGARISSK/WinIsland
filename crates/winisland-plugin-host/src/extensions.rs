@@ -97,6 +97,7 @@ pub(crate) struct State {
     pub focus: Option<(u64, u64)>,
     pub hover: Option<(u64, u64)>,
     pub capture_button: u32,
+    pub scrolled_at: Option<Instant>,
     pub sessions: Vec<MediaSessionV2>,
     pub island: IslandStateV2,
     pub sequence: u64,

@@ -31,7 +31,12 @@ pub const INPUT_SCROLL: u32 = 1 << 1;
 pub const INPUT_KEYBOARD: u32 = 1 << 2;
 pub const INPUT_FILES: u32 = 1 << 3;
 pub const INPUT_CAPTURE_ON_PRESS: u32 = 1 << 4;
-pub const INPUT_FLAGS: u32 = (1 << 5) - 1;
+/// Marks a scroll region whose content cannot scroll further toward its start. A fresh wheel
+/// gesture in that direction then switches pages instead of reaching the plugin.
+pub const INPUT_SCROLL_AT_START: u32 = 1 << 5;
+/// Marks a scroll region whose content cannot scroll further toward its end.
+pub const INPUT_SCROLL_AT_END: u32 = 1 << 6;
+pub const INPUT_FLAGS: u32 = (1 << 7) - 1;
 pub const MOD_CONTROL: u32 = 1;
 pub const MOD_ALT: u32 = 2;
 pub const MOD_SHIFT: u32 = 4;

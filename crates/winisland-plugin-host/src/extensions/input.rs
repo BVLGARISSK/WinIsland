@@ -1,8 +1,41 @@
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use winisland_plugin_api::*;
 
 use super::{Event, Extensions, State};
+
+/// Wheel events closer together than this belong to one gesture, so a scroll that runs into an
+/// edge stops there instead of switching pages.
+const GESTURE_GAP: Duration = Duration::from_millis(350);
+
+enum WheelEdge {
+    Inside,
+    Reached,
+    Across,
+}
+
+/// Classifies a wheel event over a region that reports its scroll edges: horizontal wheels go
+/// across pages, and vertical ones reach an edge when the content cannot scroll that way.
+/// Regions without edge flags keep every wheel event.
+fn wheel_edge(flags: u32, event: &Event) -> WheelEdge {
+    if flags & (INPUT_SCROLL_AT_START | INPUT_SCROLL_AT_END) == 0 {
+        return WheelEdge::Inside;
+    }
+    if event.delta_x.abs() > event.delta_y.abs() {
+        return WheelEdge::Across;
+    }
+    let edge = if event.delta_y > 0.0 {
+        INPUT_SCROLL_AT_START
+    } else {
+        INPUT_SCROLL_AT_END
+    };
+    if flags & edge != 0 {
+        WheelEdge::Reached
+    } else {
+        WheelEdge::Inside
+    }
+}
 
 #[derive(Default)]
 pub struct InputOutcome {
@@ -232,7 +265,21 @@ impl Extensions {
         }
         let target = if keyboard {
             state.focus
-        } else if matches!(event.detail, INPUT_WHEEL | INPUT_DROP) {
+        } else if event.detail == INPUT_WHEEL {
+            let now = Instant::now();
+            let continuing = state
+                .scrolled_at
+                .is_some_and(|at| now.saturating_duration_since(at) < GESTURE_GAP);
+            let target = hit
+                .filter(|hit| match wheel_edge(hit.1, &event) {
+                    WheelEdge::Inside => true,
+                    WheelEdge::Reached => continuing,
+                    WheelEdge::Across => false,
+                })
+                .map(|hit| hit.0);
+            state.scrolled_at = target.is_some().then_some(now);
+            target
+        } else if event.detail == INPUT_DROP {
             hit.map(|hit| hit.0)
         } else {
             state.capture.or(hit.map(|hit| hit.0))
