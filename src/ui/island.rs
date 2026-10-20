@@ -192,6 +192,10 @@ pub fn draw_island(painter: Painter<'_>, params: DrawIslandParams<'_>) -> bool {
         params.surface,
         params.secondary_task,
         layout.compact_scale,
+        params
+            .style
+            .plugin_host
+            .map(|host| (host, params.style.plugin_frames)),
     );
     draw_pager(painter, &params, rect, expanded_alpha);
     if params.attention_alpha > 0.0 {

@@ -285,7 +285,7 @@ impl App {
             );
         }
         if !self.expanded
-            && let Some(orb) = self.timer_orb_rect()
+            && let Some(orb) = self.status_orb_rect()
         {
             regions.push(rect_region(orb));
         }

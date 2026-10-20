@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU8, Ordering};
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ExpandedPageKind {
     Music,
@@ -21,7 +21,20 @@ pub fn default_expanded_page_order() -> Vec<ExpandedPageKind> {
 pub fn normalize_expanded_pages(
     order: &mut Vec<ExpandedPageKind>,
     hidden: &mut Vec<ExpandedPageKind>,
+    plugin_pages: &mut Vec<PluginPageSlot>,
 ) -> bool {
+    let plugin_count = plugin_pages.len();
+    let mut seen = Vec::with_capacity(plugin_count);
+    plugin_pages.retain(|slot| {
+        let id = slot.id();
+        let valid = !slot.plugin_id.is_empty()
+            && !slot.page_key.is_empty()
+            && slot.plugin_id.len() <= 255
+            && slot.page_key.len() <= 63
+            && !seen.contains(&id);
+        seen.push(id);
+        valid
+    });
     let mut normalized_order = Vec::with_capacity(ExpandedPageKind::ALL.len());
     let mut normalized_hidden = Vec::with_capacity(ExpandedPageKind::ALL.len());
     for page in order.iter() {
@@ -45,13 +58,92 @@ pub fn normalize_expanded_pages(
     if normalized_order
         .iter()
         .all(|page| normalized_hidden.contains(page))
+        && plugin_pages.iter().all(|slot| slot.hidden)
     {
         normalized_hidden.retain(|page| *page != ExpandedPageKind::Widgets);
     }
-    let changed = normalized_order != *order || normalized_hidden != *hidden;
+    let changed = normalized_order != *order
+        || normalized_hidden != *hidden
+        || plugin_pages.len() != plugin_count;
     *order = normalized_order;
     *hidden = normalized_hidden;
     changed
+}
+
+/// Where a plugin page sits among the expanded pages. Built-in pages keep their own order list,
+/// which older versions read unchanged; `position` is the index in the combined order.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PluginPageSlot {
+    pub plugin_id: String,
+    pub page_key: String,
+    pub position: usize,
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+impl PluginPageSlot {
+    pub fn id(&self) -> PageId {
+        PageId::Plugin {
+            plugin_id: self.plugin_id.clone(),
+            page_key: self.page_key.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PageId {
+    Builtin(ExpandedPageKind),
+    Plugin { plugin_id: String, page_key: String },
+}
+
+/// The combined page order with each page's hidden state.
+pub fn page_order(
+    order: &[ExpandedPageKind],
+    hidden: &[ExpandedPageKind],
+    plugin_pages: &[PluginPageSlot],
+) -> Vec<(PageId, bool)> {
+    let mut pages: Vec<_> = order
+        .iter()
+        .map(|kind| (PageId::Builtin(*kind), hidden.contains(kind)))
+        .collect();
+    let mut slots: Vec<_> = plugin_pages.iter().collect();
+    slots.sort_by_key(|slot| slot.position);
+    for slot in slots {
+        let index = slot.position.min(pages.len());
+        pages.insert(index, (slot.id(), slot.hidden));
+    }
+    pages
+}
+
+/// Writes a combined page order back into the built-in and plugin lists.
+pub fn set_page_order(
+    pages: &[(PageId, bool)],
+    order: &mut Vec<ExpandedPageKind>,
+    hidden: &mut Vec<ExpandedPageKind>,
+    plugin_pages: &mut Vec<PluginPageSlot>,
+) {
+    order.clear();
+    hidden.clear();
+    plugin_pages.clear();
+    for (position, (page, is_hidden)) in pages.iter().enumerate() {
+        match page {
+            PageId::Builtin(kind) => {
+                order.push(*kind);
+                if *is_hidden {
+                    hidden.push(*kind);
+                }
+            }
+            PageId::Plugin {
+                plugin_id,
+                page_key,
+            } => plugin_pages.push(PluginPageSlot {
+                plugin_id: plugin_id.clone(),
+                page_key: page_key.clone(),
+                position,
+                hidden: *is_hidden,
+            }),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

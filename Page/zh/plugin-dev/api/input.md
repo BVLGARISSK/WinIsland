@@ -53,8 +53,36 @@ fn bind_button(
 | `INPUT_KEYBOARD` | 点击后获得键盘焦点；应同时设置 `INPUT_POINTER` |
 | `INPUT_FILES` | 拖入此区域的文件路径 |
 | `INPUT_CAPTURE_ON_PRESS` | 按下后捕获指针，直到对应释放或取消；应同时设置 `INPUT_POINTER` |
+| `INPUT_SCROLL_AT_START` | 从 `0.12.0` 起提供：用于 `INPUT_SCROLL` 区域，表示内容已无法再向开头（向上）滚动 |
+| `INPUT_SCROLL_AT_END` | 从 `0.12.0` 起提供：用于 `INPUT_SCROLL` 区域，表示内容已无法再向末尾（向下）滚动 |
 
 命中测试优先选择最上层可交互呈现中的最后一个匹配区域。没有 `EVENT_INPUT` 订阅的区域不会接管输入；因此，绘制层在设置区域和订阅之前不会拦截操作。目标隐藏或进入不可交互的过渡状态时，会失去捕获与焦点。触摸按单指针路由，不提供多点触控接口。
+
+## 页面内滚动
+
+`INPUT_SCROLL` 区域默认接管其上方的全部滚轮事件，因此指针停在可滚动列表上时，用户无法用滚轮切换页面。从 `0.12.0` 起，可用 `INPUT_SCROLL_AT_START` 和 `INPUT_SCROLL_AT_END` 报告列表的滚动边界，宿主会与翻页共享滚轮：
+
+- 内容还能沿滚轮方向滚动时，事件交给插件。
+- 一次连续滚动到达边界后，剩余事件仍交给插件，不会翻页。
+- 在已到达的边界方向上开始新的一次滚动时，切换页面。相邻事件间隔超过 350 毫秒即视为新的一次滚动。
+- 区域上的横向滚轮始终用于切换页面。
+
+内容无需滚动时同时设置两个标记；内容能再次滚动时立即清除。所有带 `INPUT_SCROLL` 的区域都应设置这些标记。标记应与滚动位置同步更新；使用平滑滚动时，以目标位置而非动画中的位置为准：
+
+```rust
+fn scroll_flags(scroll: f32, max_scroll: f32) -> u32 {
+    let mut flags = INPUT_SCROLL;
+    if scroll <= 0.5 {
+        flags |= INPUT_SCROLL_AT_START;
+    }
+    if scroll >= max_scroll - 0.5 {
+        flags |= INPUT_SCROLL_AT_END;
+    }
+    flags
+}
+```
+
+`0.12.0` 之前的宿主会以 `InvalidArgument` 拒绝未知标记。如需兼容，可在失败后用 `(1 << 5) - 1` 屏蔽标记再调用一次 `set_regions`；此时区域会像以前一样接管全部滚轮事件。
 
 ## 事件数据
 

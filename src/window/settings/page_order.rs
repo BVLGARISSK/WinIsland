@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::time::Instant;
 
-use winisland_core::config::ExpandedPageKind;
+use winisland_core::config::{ExpandedPageKind, PageId, page_order, set_page_order};
 use winisland_core::i18n::tr;
 use winisland_render::FontWeight;
 use winisland_render::text::FontManager;
@@ -30,41 +31,21 @@ enum ArrowDirection {
     Down,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct PageOrderDrag {
-    kind: ExpandedPageKind,
+    page: PageId,
     grab_offset: f32,
 }
 
+#[derive(Default)]
 pub(crate) struct PageOrderState {
-    slots: [f32; ExpandedPageKind::ALL.len()],
-    checks: [f32; ExpandedPageKind::ALL.len()],
+    slots: HashMap<PageId, f32>,
+    checks: HashMap<PageId, f32>,
     initialized: bool,
     drag: Option<PageOrderDrag>,
     lift: f32,
-    press: Option<(ExpandedPageKind, ArrowDirection, Instant)>,
-    original_order: Option<Vec<ExpandedPageKind>>,
-}
-
-impl Default for PageOrderState {
-    fn default() -> Self {
-        Self {
-            slots: [0.0; ExpandedPageKind::ALL.len()],
-            checks: [1.0; ExpandedPageKind::ALL.len()],
-            initialized: false,
-            drag: None,
-            lift: 0.0,
-            press: None,
-            original_order: None,
-        }
-    }
-}
-
-fn kind_index(kind: ExpandedPageKind) -> usize {
-    ExpandedPageKind::ALL
-        .iter()
-        .position(|candidate| *candidate == kind)
-        .unwrap_or(0)
+    press: Option<(PageId, ArrowDirection, Instant)>,
+    original_order: Option<Vec<(PageId, bool)>>,
 }
 
 pub(crate) fn page_name_key(kind: ExpandedPageKind) -> &'static str {
@@ -149,8 +130,93 @@ pub(crate) fn draw_checkbox(
 }
 
 impl SettingsApp {
+    fn active_plugin_pages(&self) -> Vec<winisland_plugin_host::host::PluginPage> {
+        let mut pages = self
+            .plugin_host
+            .as_ref()
+            .map(|host| host.pages())
+            .unwrap_or_default();
+        pages.retain(|page| page.plugin_id != crate::plugin::calendar::ID);
+        pages
+    }
+
+    /// The stored page order plus loaded plugin pages that have no stored position yet.
+    fn full_page_order(&self) -> Vec<(PageId, bool)> {
+        let mut pages = page_order(
+            &self.config.expanded_page_order,
+            &self.config.hidden_expanded_pages,
+            &self.config.plugin_pages,
+        );
+        for page in self.active_plugin_pages() {
+            let id = PageId::Plugin {
+                plugin_id: page.plugin_id,
+                page_key: page.key,
+            };
+            if !pages.iter().any(|(candidate, _)| *candidate == id) {
+                pages.push((id, false));
+            }
+        }
+        pages
+    }
+
+    /// The pages listed in settings: built-in pages and pages of loaded plugins.
+    fn page_rows(&self) -> Vec<(PageId, bool)> {
+        let active = self.active_plugin_pages();
+        self.full_page_order()
+            .into_iter()
+            .filter(|(page, _)| match page {
+                PageId::Builtin(_) => true,
+                PageId::Plugin {
+                    plugin_id,
+                    page_key,
+                } => active.iter().any(|candidate| {
+                    candidate.plugin_id == *plugin_id && candidate.key == *page_key
+                }),
+            })
+            .collect()
+    }
+
+    /// Stores a new order of the listed pages; unlisted plugin pages keep their positions.
+    fn set_page_rows(&mut self, rows: &[(PageId, bool)]) {
+        let listed = self.page_rows();
+        let mut rows = rows.iter().cloned();
+        let full: Vec<_> = self
+            .full_page_order()
+            .into_iter()
+            .map(|entry| {
+                if listed.iter().any(|(page, _)| *page == entry.0) {
+                    rows.next().unwrap_or(entry)
+                } else {
+                    entry
+                }
+            })
+            .collect();
+        set_page_order(
+            &full,
+            &mut self.config.expanded_page_order,
+            &mut self.config.hidden_expanded_pages,
+            &mut self.config.plugin_pages,
+        );
+    }
+
+    fn page_name(&self, page: &PageId) -> String {
+        match page {
+            PageId::Builtin(kind) => tr(page_name_key(*kind)),
+            PageId::Plugin {
+                plugin_id,
+                page_key,
+            } => self
+                .active_plugin_pages()
+                .into_iter()
+                .find(|candidate| candidate.plugin_id == *plugin_id && candidate.key == *page_key)
+                .map(|candidate| candidate.title)
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| page_key.clone()),
+        }
+    }
+
     pub(crate) fn page_order_display_height(&self) -> f32 {
-        page_order_list_height(self.config.expanded_page_order.len())
+        page_order_list_height(self.page_rows().len())
             + HINT_GAP
             + self.page_order_hint_lines().len() as f32 * HINT_LINE_HEIGHT
     }
@@ -181,7 +247,7 @@ impl SettingsApp {
                     SIDEBAR_W + CONTENT_PADDING,
                     y - self.scroll_y,
                     self.content_width() - CONTENT_PADDING * 2.0,
-                    page_order_list_height(self.config.expanded_page_order.len()),
+                    page_order_list_height(self.page_rows().len()),
                 ));
             }
             y += item.height();
@@ -208,17 +274,17 @@ impl SettingsApp {
         )
     }
 
-    fn page_order_row_top(&self, list: Rect, slot: usize, kind: ExpandedPageKind) -> f32 {
+    fn page_order_row_top(&self, list: Rect, slot: usize, page: &PageId) -> f32 {
         let position = if self.page_order.initialized {
-            self.page_order.slots[kind_index(kind)]
+            self.page_order
+                .slots
+                .get(page)
+                .copied()
+                .unwrap_or(slot as f32)
         } else {
             slot as f32
         };
         list.top + position * ROW_HEIGHT
-    }
-
-    fn page_hidden(&self, kind: ExpandedPageKind) -> bool {
-        self.config.hidden_expanded_pages.contains(&kind)
     }
 
     fn page_order_row_at(&mut self, x: f32, y: f32) -> Option<(Rect, usize)> {
@@ -231,15 +297,14 @@ impl SettingsApp {
         if !list.contains(point) || y < SETTINGS_HEADER_H {
             return None;
         }
-        self.config
-            .expanded_page_order
+        self.page_rows()
             .iter()
             .enumerate()
             .rev()
-            .find(|(slot, kind)| {
+            .find(|(slot, (page, _))| {
                 Rect::from_xywh(
                     list.left,
-                    self.page_order_row_top(list, *slot, **kind),
+                    self.page_order_row_top(list, *slot, page),
                     list.width(),
                     ROW_HEIGHT,
                 )
@@ -254,33 +319,32 @@ impl SettingsApp {
     }
 
     fn move_page(&mut self, from: usize, to: usize) {
-        let order = &mut self.config.expanded_page_order;
-        if from == to || from >= order.len() || to >= order.len() {
+        let mut rows = self.page_rows();
+        if from == to || from >= rows.len() || to >= rows.len() {
             return;
         }
-        let kind = order.remove(from);
-        order.insert(to, kind);
+        let page = rows.remove(from);
+        rows.insert(to, page);
+        self.set_page_rows(&rows);
     }
 
-    fn page_toggle_locked(&self, kind: ExpandedPageKind) -> bool {
-        !self.page_hidden(kind)
-            && self
-                .config
-                .expanded_page_order
+    fn page_toggle_locked(rows: &[(PageId, bool)], page: &PageId) -> bool {
+        rows.iter()
+            .all(|(candidate, hidden)| *hidden || candidate == page)
+            && rows
                 .iter()
-                .all(|page| *page == kind || self.page_hidden(*page))
+                .any(|(candidate, hidden)| candidate == page && !hidden)
     }
 
-    fn toggle_page_visibility(&mut self, kind: ExpandedPageKind) {
-        if self.page_toggle_locked(kind) {
+    fn toggle_page_visibility(&mut self, page: &PageId) {
+        let mut rows = self.page_rows();
+        if Self::page_toggle_locked(&rows, page) {
             return;
         }
-        let hidden = &mut self.config.hidden_expanded_pages;
-        if let Some(index) = hidden.iter().position(|page| *page == kind) {
-            hidden.remove(index);
-        } else {
-            hidden.push(kind);
+        if let Some((_, hidden)) = rows.iter_mut().find(|(candidate, _)| candidate == page) {
+            *hidden = !*hidden;
         }
+        self.set_page_rows(&rows);
         self.persist_settings_change();
     }
 
@@ -290,14 +354,15 @@ impl SettingsApp {
             return false;
         };
         let pointer = Point::new(x, y);
-        let count = self.config.expanded_page_order.len();
-        let kind = self.config.expanded_page_order[row];
-        let row_top = self.page_order_row_top(list, row, kind);
+        let rows = self.page_rows();
+        let count = rows.len();
+        let page = rows[row].0.clone();
+        let row_top = self.page_order_row_top(list, row, &page);
         if Self::page_order_check_rect(list, row_top)
             .inset(-6.0)
             .contains(pointer)
         {
-            self.toggle_page_visibility(kind);
+            self.toggle_page_visibility(&page);
             return true;
         }
         for direction in [ArrowDirection::Up, ArrowDirection::Down] {
@@ -309,15 +374,15 @@ impl SettingsApp {
                 ArrowDirection::Down => (row + 1 < count).then_some(row + 1),
             };
             if let Some(target) = target {
-                self.page_order.press = Some((kind, direction, Instant::now()));
+                self.page_order.press = Some((page.clone(), direction, Instant::now()));
                 self.move_page(row, target);
                 self.persist_settings_change();
             }
             return true;
         }
-        self.page_order.original_order = Some(self.config.expanded_page_order.clone());
+        self.page_order.original_order = Some(rows);
         self.page_order.drag = Some(PageOrderDrag {
-            kind,
+            page,
             grab_offset: y - row_top,
         });
         self.request_redraw();
@@ -325,23 +390,20 @@ impl SettingsApp {
     }
 
     pub(crate) fn update_page_order_drag(&mut self) -> bool {
-        let Some(drag) = self.page_order.drag else {
+        let Some(drag) = self.page_order.drag.clone() else {
             return false;
         };
         self.ensure_items_cache();
         let Some(list) = self.page_order_list_rect() else {
             return false;
         };
-        let count = self.config.expanded_page_order.len();
+        let rows = self.page_rows();
+        let count = rows.len();
         let pointer_slot = (self.logical_mouse_pos.1 - drag.grab_offset - list.top) / ROW_HEIGHT;
         let target = pointer_slot
             .round()
             .clamp(0.0, count.saturating_sub(1) as f32) as usize;
-        if let Some(current) = self
-            .config
-            .expanded_page_order
-            .iter()
-            .position(|kind| *kind == drag.kind)
+        if let Some(current) = rows.iter().position(|(page, _)| *page == drag.page)
             && current != target
         {
             self.move_page(current, target);
@@ -360,7 +422,7 @@ impl SettingsApp {
             .page_order
             .original_order
             .take()
-            .is_some_and(|original| original != self.config.expanded_page_order);
+            .is_some_and(|original| original != self.page_rows());
         if changed {
             self.persist_settings_change();
         } else {
@@ -374,7 +436,7 @@ impl SettingsApp {
             return false;
         }
         if let Some(original) = self.page_order.original_order.take() {
-            self.config.expanded_page_order = original;
+            self.set_page_rows(&original);
         }
         self.mark_items_dirty();
         self.request_redraw();
@@ -391,17 +453,21 @@ impl SettingsApp {
             || state.drag.is_some()
             || state
                 .press
+                .as_ref()
                 .is_some_and(|(_, _, started)| started.elapsed().as_secs_f32() < PRESS_SECS)
             || self
-                .config
-                .expanded_page_order
+                .page_rows()
                 .iter()
                 .enumerate()
-                .any(|(slot, kind)| {
-                    (state.slots[kind_index(*kind)] - slot as f32).abs() > 0.001
-                        || (state.checks[kind_index(*kind)] - f32::from(!self.page_hidden(*kind)))
-                            .abs()
-                            > 0.001
+                .any(|(slot, (page, hidden))| {
+                    state
+                        .slots
+                        .get(page)
+                        .is_none_or(|value| (value - slot as f32).abs() > 0.001)
+                        || state
+                            .checks
+                            .get(page)
+                            .is_none_or(|value| (value - f32::from(!hidden)).abs() > 0.001)
                 })
     }
 
@@ -410,29 +476,38 @@ impl SettingsApp {
             self.page_order.initialized = false;
             return false;
         }
-        let order = self.config.expanded_page_order.clone();
-        let hidden = self.config.hidden_expanded_pages.clone();
-        let dragged = self.page_order.drag.map(|drag| drag.kind);
+        let rows = self.page_rows();
+        let dragged = self.page_order.drag.as_ref().map(|drag| drag.page.clone());
         let state = &mut self.page_order;
         let mut changed = false;
-        for (slot, kind) in order.iter().enumerate() {
-            let index = kind_index(*kind);
-            let check_target = f32::from(!hidden.contains(kind));
-            if !state.initialized {
-                state.slots[index] = slot as f32;
-                state.checks[index] = check_target;
+        state
+            .slots
+            .retain(|page, _| rows.iter().any(|(candidate, _)| candidate == page));
+        state
+            .checks
+            .retain(|page, _| rows.iter().any(|(candidate, _)| candidate == page));
+        for (slot, (page, hidden)) in rows.iter().enumerate() {
+            let check_target = f32::from(!hidden);
+            if !state.initialized || !state.slots.contains_key(page) {
+                state.slots.insert(page.clone(), slot as f32);
+                state.checks.insert(page.clone(), check_target);
                 changed = true;
                 continue;
             }
-            if dragged != Some(*kind) {
-                changed |= animate_towards(&mut state.slots[index], slot as f32, SLIDE_RATE, dt);
+            if dragged.as_ref() != Some(page)
+                && let Some(value) = state.slots.get_mut(page)
+            {
+                changed |= animate_towards(value, slot as f32, SLIDE_RATE, dt);
             }
-            changed |= animate_towards(&mut state.checks[index], check_target, CHECK_RATE, dt);
+            if let Some(value) = state.checks.get_mut(page) {
+                changed |= animate_towards(value, check_target, CHECK_RATE, dt);
+            }
         }
         state.initialized = true;
         changed |= animate_towards(&mut state.lift, f32::from(dragged.is_some()), LIFT_RATE, dt);
         if state
             .press
+            .as_ref()
             .is_some_and(|(_, _, started)| started.elapsed().as_secs_f32() >= PRESS_SECS)
         {
             state.press = None;
@@ -470,7 +545,7 @@ impl SettingsApp {
             settings_color(theme.group_border),
         );
 
-        let order = self.config.expanded_page_order.clone();
+        let order = self.page_rows();
         let count = order.len();
         for slot in 1..count {
             painter.fill_rect(
@@ -484,23 +559,23 @@ impl SettingsApp {
             );
         }
 
-        let dragged = self.page_order.drag;
+        let dragged = self.page_order.drag.as_ref();
         let pointer = Point::new(self.logical_mouse_pos.0, self.logical_mouse_pos.1);
-        let mut rows: Vec<(usize, ExpandedPageKind, f32)> = order
+        let mut rows: Vec<(usize, PageId, bool, f32)> = order
             .iter()
             .enumerate()
-            .map(|(slot, kind)| {
+            .map(|(slot, (page, hidden))| {
                 let top = match dragged {
-                    Some(drag) if drag.kind == *kind => pointer.y - drag.grab_offset,
-                    _ => self.page_order_row_top(list, slot, *kind),
+                    Some(drag) if drag.page == *page => pointer.y - drag.grab_offset,
+                    _ => self.page_order_row_top(list, slot, page),
                 };
-                (slot, *kind, top)
+                (slot, page.clone(), *hidden, top)
             })
             .collect();
-        rows.sort_by_key(|(_, kind, _)| dragged.is_some_and(|drag| drag.kind == *kind));
+        rows.sort_by_key(|(_, page, _, _)| dragged.is_some_and(|drag| drag.page == *page));
 
-        for (slot, kind, top) in rows {
-            let is_dragged = dragged.is_some_and(|drag| drag.kind == kind);
+        for (slot, kind, hidden, top) in rows {
+            let is_dragged = dragged.is_some_and(|drag| drag.page == kind);
             let lift = if is_dragged {
                 self.page_order.lift
             } else {
@@ -541,22 +616,24 @@ impl SettingsApp {
                 );
             }
 
-            let checked = if self.page_order.initialized {
-                self.page_order.checks[kind_index(kind)]
-            } else {
-                f32::from(!self.page_hidden(kind))
-            };
+            let checked = self
+                .page_order
+                .checks
+                .get(&kind)
+                .copied()
+                .filter(|_| self.page_order.initialized)
+                .unwrap_or(f32::from(!hidden));
             let check = Self::page_order_check_rect(list, top);
             draw_checkbox(
                 painter,
                 check,
                 checked,
-                self.page_toggle_locked(kind),
+                Self::page_toggle_locked(&order, &kind),
                 theme,
             );
 
             let fonts = FontManager::global();
-            let name = tr(page_name_key(kind));
+            let name = self.page_name(&kind);
             let name_bounds = fonts.measure_str(&name, 14.0, FontWeight::REGULAR);
             let text_x = check.right + 12.0;
             let baseline = row.center_y() - name_bounds.height() / 2.0 - name_bounds.top;
@@ -594,6 +671,7 @@ impl SettingsApp {
                 let flash = self
                     .page_order
                     .press
+                    .as_ref()
                     .filter(|(pressed, pressed_direction, _)| {
                         *pressed == kind && *pressed_direction == direction
                     })

@@ -11,11 +11,11 @@ const SETTLE_SPEED: f32 = 1.0;
 const POP_AT_COLLAPSE: f32 = 0.5;
 
 impl App {
-    pub(super) fn timer_orb_rect(&self) -> Option<winisland_render::Rect> {
-        let frame = self
-            .multitask
-            .frame()
-            .filter(|frame| frame.task.content.has_timer() && frame.content_opacity > 0.5)?;
+    pub(super) fn status_orb_rect(&self) -> Option<winisland_render::Rect> {
+        let frame = self.multitask.frame().filter(|frame| {
+            (frame.task.content.has_timer() || frame.task.content.plugin_surface().is_some())
+                && frame.content_opacity > 0.5
+        })?;
         let layout = self.compute_island_layout();
         crate::ui::island::multitask::surface(
             winisland_render::Rect::from_xywh(
@@ -51,9 +51,16 @@ impl App {
             .device_feed
             .as_ref()
             .map_or(DeviceActivity::default(), |feed| feed.snapshot());
+        let plugin_status = self.plugin_host.as_ref().and_then(|host| {
+            host.surfaces()
+                .into_iter()
+                .find(|(_, spec)| spec.kind == winisland_plugin_api::SURFACE_STATUS)
+                .map(|(id, _)| id)
+        });
         let indicators_changed = self.status_indicators.update(
             activity,
             self.timer_content.filter(|_| self.timer_orb),
+            plugin_status,
             now,
         );
         let task = self.status_indicators.activity().map(|content| Task {

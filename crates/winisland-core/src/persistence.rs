@@ -212,6 +212,7 @@ pub fn load_config_at(path: &Path) -> AppConfig {
     if normalize_expanded_pages(
         &mut config.expanded_page_order,
         &mut config.hidden_expanded_pages,
+        &mut config.plugin_pages,
     ) {
         migrated = true;
     }

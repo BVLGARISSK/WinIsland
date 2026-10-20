@@ -17,9 +17,11 @@ pub(crate) struct StatusIndicators {
     camera: Tween,
     microphone: Tween,
     timer: Tween,
+    plugin: Tween,
     shared: Tween,
     timer_progress: f32,
     timer_paused: bool,
+    plugin_surface: Option<u64>,
 }
 
 impl Default for StatusIndicators {
@@ -28,9 +30,11 @@ impl Default for StatusIndicators {
             camera: Tween::new(0.0),
             microphone: Tween::new(0.0),
             timer: Tween::new(0.0),
+            plugin: Tween::new(0.0),
             shared: Tween::new(0.0),
             timer_progress: 0.0,
             timer_paused: false,
+            plugin_surface: None,
         }
     }
 }
@@ -40,19 +44,23 @@ impl StatusIndicators {
         &mut self,
         state: DeviceActivity,
         timer: Option<TimerContent>,
+        plugin_surface: Option<u64>,
         now: Instant,
     ) -> bool {
         let before = self.activity();
         let camera = state.camera == Some(true);
         let microphone = state.microphone == Some(true);
         let timing = timer.is_some();
+        let plugin = plugin_surface.is_some() && !timing;
         let devices = camera || microphone;
+        let occupied = timing || plugin;
         let pace = |other: bool| if other { SHARE_DURATION } else { FADE_DURATION };
         for (animation, active, duration) in [
-            (&mut self.camera, camera, pace(timing)),
-            (&mut self.microphone, microphone, pace(timing)),
+            (&mut self.camera, camera, pace(occupied)),
+            (&mut self.microphone, microphone, pace(occupied)),
             (&mut self.timer, timing, pace(devices)),
-            (&mut self.shared, devices && timing, SHARE_DURATION),
+            (&mut self.plugin, plugin, pace(devices)),
+            (&mut self.shared, devices && occupied, SHARE_DURATION),
         ] {
             animation.retarget(if active { 1.0 } else { 0.0 }, duration, Curve::Ease, now);
             animation.update(now);
@@ -61,6 +69,11 @@ impl StatusIndicators {
             self.timer_progress = (timer.progress() * 720.0).round() / 720.0;
             self.timer_paused = timer.paused;
         }
+        if plugin {
+            self.plugin_surface = plugin_surface;
+        } else if !self.plugin.is_animating() {
+            self.plugin_surface = None;
+        }
         before != self.activity()
     }
 
@@ -68,22 +81,25 @@ impl StatusIndicators {
         let camera = self.camera.value();
         let microphone = self.microphone.value();
         let timer = self.timer.value();
-        (camera > 0.0 || microphone > 0.0 || timer > 0.0 || self.is_animating()).then_some(
-            Activity::Status {
+        let plugin = self.plugin_surface.map_or(0.0, |_| self.plugin.value());
+        (camera > 0.0 || microphone > 0.0 || timer > 0.0 || plugin > 0.0 || self.is_animating())
+            .then_some(Activity::Status {
                 camera,
                 microphone,
                 timer,
+                plugin,
                 shared: self.shared.value(),
                 timer_progress: self.timer_progress,
                 timer_paused: self.timer_paused,
-            },
-        )
+                plugin_surface: self.plugin_surface,
+            })
     }
 
     pub(crate) fn is_animating(&self) -> bool {
         self.camera.is_animating()
             || self.microphone.is_animating()
             || self.timer.is_animating()
+            || self.plugin.is_animating()
             || self.shared.is_animating()
     }
 }
