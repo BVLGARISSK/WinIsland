@@ -10,9 +10,11 @@ pub(crate) enum Activity {
         camera: f32,
         microphone: f32,
         timer: f32,
+        plugin: f32,
         shared: f32,
         timer_progress: f32,
         timer_paused: bool,
+        plugin_surface: Option<u64>,
     },
 }
 
@@ -26,6 +28,19 @@ impl Activity {
     pub(crate) fn has_timer(self) -> bool {
         match self {
             Self::Status { timer, .. } => timer > 0.5,
+        }
+    }
+
+    /// The plugin status surface occupying the leading circle, with its visibility.
+    pub(crate) fn plugin_surface(self) -> Option<(u64, f32)> {
+        match self {
+            Self::Status {
+                plugin,
+                plugin_surface,
+                ..
+            } => plugin_surface
+                .filter(|_| plugin > 0.0)
+                .map(|id| (id, plugin)),
         }
     }
 

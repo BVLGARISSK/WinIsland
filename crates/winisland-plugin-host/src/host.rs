@@ -24,6 +24,13 @@ mod settings;
 mod state;
 pub use media::MediaSnapshot;
 
+pub struct PluginPage {
+    pub id: u64,
+    pub plugin_id: String,
+    pub key: String,
+    pub title: String,
+}
+
 pub struct PluginHost {
     entries: RefCell<Vec<PluginInstance>>,
     builtins: RefCell<HashMap<String, PluginDescriptorV2>>,
@@ -65,6 +72,40 @@ impl PluginHost {
             .collect();
         surfaces.sort_by_key(|(id, spec)| (spec.order, *id));
         surfaces
+    }
+
+    fn surface_plugin_id(&self, id: u64) -> Option<String> {
+        let token = self
+            .runtime
+            .resources
+            .owner(ResourceKind::Widget, id)
+            .ok()?;
+        Some(self.runtime.registry.get(token).ok()?.id.clone())
+    }
+
+    /// Enabled expanded pages with their owning plugin, in surface order.
+    pub fn pages(&self) -> Vec<PluginPage> {
+        self.surfaces()
+            .into_iter()
+            .filter(|(_, spec)| spec.kind == winisland_plugin_api::SURFACE_PAGE)
+            .filter_map(|(id, spec)| {
+                Some(PluginPage {
+                    id,
+                    plugin_id: self.surface_plugin_id(id)?,
+                    key: fixed_text(&spec.key),
+                    title: fixed_text(&spec.title),
+                })
+            })
+            .collect()
+    }
+
+    /// The first enabled page owned by the plugin that owns `surface`.
+    pub fn sibling_page(&self, surface: u64) -> Option<u64> {
+        let owner = self.surface_plugin_id(surface)?;
+        self.pages()
+            .into_iter()
+            .find(|page| page.plugin_id == owner)
+            .map(|page| page.id)
     }
 
     pub fn drawable_ids(&self) -> Vec<u64> {

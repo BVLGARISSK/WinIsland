@@ -137,13 +137,21 @@ impl App {
     pub(super) fn handle_press(&mut self, rel_x: i32, rel_y: i32, layout: &IslandLayout) {
         crate::ui::expanded::timer_view::clear_selection();
         if !self.expanded
-            && self.timer_orb_rect().is_some_and(|orb| {
+            && self.status_orb_rect().is_some_and(|orb| {
                 orb.contains(winisland_render::Point::new(rel_x as f32, rel_y as f32))
             })
         {
+            let target = match self.multitask.frame().map(|frame| frame.task.content) {
+                Some(content) if content.has_timer() => Some(ExpandedPage::Timer),
+                Some(content) => content
+                    .plugin_surface()
+                    .and_then(|(id, _)| self.plugin_host.as_ref()?.sibling_page(id))
+                    .map(ExpandedPage::Plugin),
+                None => None,
+            };
             self.expand();
-            if self.expanded_pages().contains(&ExpandedPage::Timer) {
-                self.current_page = ExpandedPage::Timer;
+            if let Some(page) = target.filter(|page| self.expanded_pages().contains(page)) {
+                self.current_page = page;
                 self.snap_to_current_page();
             }
             self.idle_timer = Instant::now();

@@ -57,6 +57,9 @@ pub const SURFACE_COMPACT_RIGHT: u32 = 3;
 pub const SURFACE_BACKGROUND: u32 = 4;
 pub const SURFACE_FOREGROUND: u32 = 5;
 pub const SURFACE_COMPACT_MAIN: u32 = 6;
+/// A round status indicator beside the compact island, shown while enabled. Clicking it opens
+/// the plugin's first page.
+pub const SURFACE_STATUS: u32 = 7;
 pub const SURFACE_ENABLED: u32 = 1;
 pub const TIMER_VISIBLE_ONLY: u32 = 1;
 pub const COMMAND_ENABLED: u32 = 1;
