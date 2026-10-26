@@ -58,6 +58,7 @@ impl SettingsApp {
             BuiltinPage::Behavior => self.build_behavior_page().into_items(),
             BuiltinPage::Alerts => self.build_alerts_page().into_items(),
             BuiltinPage::Music => self.build_music_items(),
+            BuiltinPage::LingoSoul => self.build_lingosoul_page(false).into_items(),
             BuiltinPage::Widgets | BuiltinPage::Plugins | BuiltinPage::About => Vec::new(),
         }
     }

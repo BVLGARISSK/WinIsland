@@ -18,6 +18,9 @@ impl App {
         if let Some(win) = self.window
             && win.id() == id
         {
+            if self.route_lingosoul_input(&event) {
+                return;
+            }
             if self.route_plugin_input(&event) {
                 return;
             }
@@ -183,7 +186,11 @@ impl App {
                             .abs()
                             .max(1.0);
                         let dist_h = (self.springs.h.value - compact_target_h).abs();
-                        let progress = (dist_h / total_h).clamp(0.0, 1.0);
+                        let progress = if !self.expanded && self.lingosoul.wants_glass() {
+                            0.0
+                        } else {
+                            (dist_h / total_h).clamp(0.0, 1.0)
+                        };
                         if let Some(event) = self.next_v2_media_event() {
                             match event {
                                 Some(source) => {
@@ -434,7 +441,32 @@ impl App {
                                 )
                             },
                         );
-                        super::system::update_backdrop_capture(
+                        let lingosoul_reach =
+                            self.lingosoul.style().drop * self.springs.h.value * 0.35;
+                        let liquid_interest = winisland_render::Rect::from_ltrb(
+                            liquid_interest.left - lingosoul_reach,
+                            liquid_interest.top - lingosoul_reach,
+                            liquid_interest.right + lingosoul_reach,
+                            liquid_interest.bottom + lingosoul_reach,
+                        );
+                        let liquid_interest = if self.lingosoul.wants_glass()
+                            || self.lingosoul.is_animating()
+                        {
+                            let (extent_w, extent_h) = self.lingosoul.capture_extent(&self.config);
+                            let margin = 24.0 * self.config.compact_scale;
+                            let centre =
+                                island_layout.current_island_x as f32 + self.springs.w.value * 0.5;
+                            let top = island_layout.current_island_y as f32;
+                            winisland_render::Rect::from_ltrb(
+                                liquid_interest.left.min(centre - extent_w * 0.5 - margin),
+                                liquid_interest.top.min(top - margin),
+                                liquid_interest.right.max(centre + extent_w * 0.5 + margin),
+                                liquid_interest.bottom.max(top + extent_h + margin * 2.5),
+                            )
+                        } else {
+                            liquid_interest
+                        };
+                        let backdrop_ready = super::system::update_backdrop_capture(
                             &mut self.backdrop_capture,
                             &mut renderer,
                             super::system::BackdropCaptureInput {
@@ -452,13 +484,19 @@ impl App {
                                 } else {
                                     liquid_interest
                                 },
-                                frost_sigma: self.config.liquid_glass_blur * liquid_scale,
+                                frost_sigma: self.config.liquid_glass_blur
+                                    * liquid_scale
+                                    * (1.0 - 0.85 * self.lingosoul.style().drop),
                                 active: self.recorder.is_some()
-                                    || self.config.island_style == "liquid",
-                                animating: self.recorder.is_some() || self.springs.any_animating(),
+                                    || self.config.island_style == "liquid"
+                                    || self.lingosoul.needs_backdrop(),
+                                animating: self.recorder.is_some()
+                                    || self.springs.any_animating()
+                                    || self.lingosoul.is_animating(),
                                 visible_to_capture: self.config.liquid_glass_compat_capture,
                             },
                         );
+                        self.lingosoul.set_glass_ready(backdrop_ready);
                         let main_target = renderer.main_target();
                         let render_result =
                             renderer.frame(main_target, |drawing_context, painter| {
@@ -519,9 +557,10 @@ impl App {
                                         style: crate::ui::island::StyleParams {
                                             island_style: &self.config.island_style,
                                             host_backdrop,
-                                            liquid_backdrop: (self.config.island_style == "liquid")
-                                                .then(|| drawing_context.backdrop())
-                                                .flatten(),
+                                            liquid_backdrop: (self.config.island_style == "liquid"
+                                                || self.lingosoul.needs_backdrop())
+                                            .then(|| drawing_context.backdrop())
+                                            .flatten(),
                                             liquid_optics: crate::ui::island::LiquidOptics {
                                                 refraction: self.config.liquid_glass_refraction
                                                     / 100.0,
@@ -530,6 +569,9 @@ impl App {
                                                 tint: self.config.liquid_glass_tint / 100.0,
                                             },
                                             liquid_siri: self.config.liquid_glass_siri,
+                                            lingosoul: self.lingosoul.style(),
+                                            lingosoul_reply: self.lingosoul.reply_text(),
+                                            lingosoul_chat: Some(self.lingosoul.chat()),
                                             use_blur: self.config.motion_blur,
                                             font_size: self.config.font_size,
                                             music_text_y_offset: self.config.music_text_y_offset,
@@ -591,6 +633,7 @@ impl AppHandler for App {
                 return;
             }
             PlatformEvent::Wake => {
+                self.serve_assistant_requests();
                 self.next_frame_deadline = Instant::now();
                 if let Some(window_ref) = self.window {
                     window_ref.request_redraw();

@@ -5,7 +5,7 @@ use winisland_plugin_api::types::v2::widget::WidgetSpecV2;
 use winisland_plugin_api::*;
 
 use super::{read_bytes, read_struct, read_utf8, runtime};
-use crate::extensions::{Callback, Command, Event, HostRequest, Timer};
+use crate::extensions::{AssistantTool, Callback, Command, Event, HostRequest, Timer};
 use crate::resources::ResourceKind;
 use crate::runtime::HostRuntime;
 
@@ -282,6 +282,7 @@ unsafe fn release_callback(
         host.resources.release(token, kind, id.get())?;
         state.callbacks.remove(&id.get());
         state.commands.remove(&id.get());
+        state.assistant_tools.remove(&id.get());
         let mut cancelled = Vec::new();
         if let Some(queue) = state.pending.get_mut(&token) {
             queue.retain(|(resource, event)| {
@@ -441,6 +442,123 @@ pub unsafe extern "C" fn register_command(
         }
         Ok(())
     })())
+}
+
+pub unsafe extern "C" fn register_assistant_tool(
+    context: *mut c_void,
+    token: PluginToken,
+    spec: *const AssistantToolSpecV2,
+    out: *mut ResourceId,
+) -> PluginStatus {
+    status((|| {
+        if out.is_null() {
+            return Err(PluginStatus::InvalidArgument);
+        }
+        // SAFETY: The ABI caller supplies a live context and a readable sized descriptor.
+        let (host, spec) = unsafe { (access(context, token, CAP_ASSISTANT)?, read_struct(spec)?) };
+        let plugin = host.registry.get(token)?.id;
+        let id = format!("{plugin}.{}", key(&spec.key)?);
+        let description = text(&spec.description)?.to_owned();
+        // SAFETY: The schema slice stays readable through this synchronous call.
+        let schema = unsafe { read_utf8(spec.schema, 16 * 1024)? };
+        let function = spec.callback.ok_or(PluginStatus::InvalidArgument)?;
+        if description.is_empty() || spec.flags & !ASSISTANT_TOOL_ENABLED != 0 {
+            return Err(PluginStatus::InvalidArgument);
+        }
+        let mut state = host
+            .extensions
+            .state
+            .lock()
+            .map_err(|_| PluginStatus::Internal)?;
+        if state.assistant_tools.values().any(|tool| tool.id == id) {
+            return Err(PluginStatus::InvalidArgument);
+        }
+        let resource = host
+            .resources
+            .allocate(token, ResourceKind::AssistantTool, 0)?;
+        state.callbacks.insert(
+            resource,
+            Callback {
+                token,
+                target: 0,
+                mask: 0,
+                function,
+                data: spec.callback_data as usize,
+                in_flight: false,
+                timer: None,
+            },
+        );
+        state.assistant_tools.insert(
+            resource,
+            AssistantTool {
+                resource,
+                id,
+                plugin,
+                description,
+                schema,
+            },
+        );
+        drop(state);
+        host.extensions.changed();
+        // SAFETY: The output points to writable caller-owned storage for the newly allocated ID.
+        unsafe {
+            *out = ResourceId::from_raw(resource);
+        }
+        Ok(())
+    })())
+}
+
+pub unsafe extern "C" fn respond_assistant(
+    context: *mut c_void,
+    token: PluginToken,
+    sequence: u64,
+    result: u32,
+    text: Utf8Slice,
+) -> PluginStatus {
+    status((|| {
+        // SAFETY: The caller supplies a live context and a text slice readable through this call.
+        let (host, text) = unsafe {
+            (
+                access(context, token, CAP_ASSISTANT)?,
+                read_utf8(text, 64 * 1024)?,
+            )
+        };
+        if result > ASSISTANT_RESULT_ERROR {
+            return Err(PluginStatus::InvalidArgument);
+        }
+        let mut state = host
+            .extensions
+            .state
+            .lock()
+            .map_err(|_| PluginStatus::Internal)?;
+        if state.assistant_calls.get(&sequence) != Some(&token) {
+            return Err(PluginStatus::StaleHandle);
+        }
+        state.assistant_calls.remove(&sequence);
+        state
+            .assistant_results
+            .insert(sequence, (result == ASSISTANT_RESULT_OK, text));
+        drop(state);
+        host.extensions.changed();
+        Ok(())
+    })())
+}
+
+pub unsafe extern "C" fn release_assistant_tool(
+    context: *mut c_void,
+    token: PluginToken,
+    id: ResourceId,
+) -> PluginStatus {
+    // SAFETY: Arguments obey the assistant tool resource release ABI.
+    unsafe {
+        release_callback(
+            context,
+            token,
+            id,
+            CAP_ASSISTANT,
+            ResourceKind::AssistantTool,
+        )
+    }
 }
 
 pub unsafe extern "C" fn command_enabled(

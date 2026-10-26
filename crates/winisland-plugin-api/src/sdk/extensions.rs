@@ -15,6 +15,8 @@ pub struct Input(Host);
 pub struct Surfaces(Host);
 #[derive(Clone)]
 pub struct MediaSessions(Host);
+#[derive(Clone)]
+pub struct Assistant(Host);
 
 impl Host {
     pub fn supports(&self, interface: u32) -> bool {
@@ -39,6 +41,10 @@ impl Host {
     pub fn media_sessions(&self) -> Result<MediaSessions, Error> {
         self.query::<MediaSessionApiV2>(IFACE_MEDIA_SESSION)?;
         Ok(MediaSessions(self.clone()))
+    }
+    pub fn assistant(&self) -> Result<Assistant, Error> {
+        self.query::<AssistantApiV2>(IFACE_ASSISTANT)?;
+        Ok(Assistant(self.clone()))
     }
 }
 
@@ -322,6 +328,73 @@ impl Commands {
             )
         })?;
         Ok(sequence)
+    }
+}
+
+impl Assistant {
+    /// Registers a tool the voice assistant may call. `handler` receives the JSON arguments and
+    /// returns the text the assistant sees, or an error message.
+    pub fn register<F>(
+        &self,
+        key: &str,
+        description: &str,
+        schema: &str,
+        mut handler: F,
+    ) -> Result<CallbackResource, Error>
+    where
+        F: FnMut(&str) -> Result<String, String> + Send + 'static,
+    {
+        let table = self.0.query::<AssistantApiV2>(IFACE_ASSISTANT)?;
+        let function = table
+            .register
+            .ok_or(Error::MissingFunction("assistant.register"))?;
+        let respond = table
+            .respond
+            .ok_or(Error::MissingFunction("assistant.respond"))?;
+        let release = table
+            .release
+            .ok_or(Error::MissingFunction("assistant.release"))?;
+        let context = table.prefix.context as usize;
+        let token = self.0.token;
+        let mut handler: Box<Handler> = Box::new(Mutex::new(Box::new(move |event: Event| {
+            if event.kind != EVENT_ASSISTANT {
+                return;
+            }
+            let args = String::from_utf8_lossy(&event.data);
+            let (status, text) = match handler(&args) {
+                Ok(text) => (ASSISTANT_RESULT_OK, text),
+                Err(text) => (ASSISTANT_RESULT_ERROR, text),
+            };
+            // SAFETY: The host keeps the table context alive while plugin callbacks run.
+            let _ = unsafe {
+                respond(
+                    context as *mut _,
+                    token,
+                    event.sequence,
+                    status,
+                    Utf8Slice::borrowed(&text),
+                )
+            };
+        })));
+        let spec = AssistantToolSpecV2 {
+            flags: ASSISTANT_TOOL_ENABLED,
+            key: str_to_fixed(key),
+            description: str_to_fixed(description),
+            schema: Utf8Slice::borrowed(schema),
+            callback: Some(event_callback),
+            callback_data: (&mut *handler as *mut Handler).cast(),
+            ..Default::default()
+        };
+        let mut id = ResourceId::INVALID;
+        // SAFETY: The descriptor, schema and output remain valid; the boxed handler has a stable address.
+        success(unsafe { function(table.prefix.context, self.0.token, &spec, &mut id) })?;
+        Ok(CallbackResource {
+            host: self.0.clone(),
+            id,
+            context: table.prefix.context as usize,
+            release,
+            handler: Some(handler),
+        })
     }
 }
 

@@ -58,6 +58,9 @@ impl App {
             Some(crate::window::settings::PluginSettingsRequest::ShowGuide) => {
                 self.open_guide();
             }
+            Some(crate::window::settings::PluginSettingsRequest::ClearLingoSoulHistory) => {
+                self.clear_lingosoul_history();
+            }
             Some(crate::window::settings::PluginSettingsRequest::LoadMarketplace) => {
                 self.load_plugin_marketplace();
             }
@@ -853,6 +856,24 @@ pub(super) fn update_backdrop_capture(
             max_rate_hz: refresh_hz.clamp(1, rate_limit),
         },
     );
+    if frame.is_none() {
+        thread_local! {
+            static LAST_MISS: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+        }
+        LAST_MISS.with(|last| {
+            if last
+                .get()
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(10))
+            {
+                last.set(Some(Instant::now()));
+                log::info!(
+                    "Liquid glass backdrop missed a frame (animating={}, interest={:?})",
+                    input.animating,
+                    input.interest
+                );
+            }
+        });
+    }
     renderer
         .set_backdrop_frame(frame, input.frost_sigma)
         .is_ok()

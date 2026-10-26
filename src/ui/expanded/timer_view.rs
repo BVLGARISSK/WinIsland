@@ -294,6 +294,22 @@ pub fn apply_action(action: TimerAction) {
     });
 }
 
+/// Starts a countdown of `seconds` right away; zero cancels the timer.
+pub fn start_for(seconds: u64) {
+    TIMER.with(|cell| {
+        let mut timer = cell.borrow_mut();
+        timer.selected = None;
+        if seconds == 0 {
+            timer.phase = Phase::Idle;
+            return;
+        }
+        timer.seconds = seconds;
+        timer.phase = Phase::Running {
+            ends_at: Instant::now() + Duration::from_secs(seconds),
+        };
+    });
+}
+
 pub fn clear_selection() {
     TIMER.with(|cell| cell.borrow_mut().selected = None);
 }

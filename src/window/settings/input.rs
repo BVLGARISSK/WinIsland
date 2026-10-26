@@ -125,6 +125,7 @@ impl SettingsApp {
                 }
             }
             Some(BuiltinPage::Plugins) => self.handle_plugin_click(),
+            Some(BuiltinPage::LingoSoul) => self.handle_lingosoul_click(input),
             Some(BuiltinPage::About) => self.handle_about_click(input),
             None => self.handle_plugin_settings_click(input),
         }

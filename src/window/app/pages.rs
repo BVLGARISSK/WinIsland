@@ -167,7 +167,7 @@ impl App {
         }
     }
 
-    fn island_rect(&self, layout: &IslandLayout) -> Rect {
+    pub(super) fn island_rect(&self, layout: &IslandLayout) -> Rect {
         Rect::from_xywh(
             layout.current_island_x as f32,
             layout.current_island_y as f32,

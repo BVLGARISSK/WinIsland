@@ -216,6 +216,12 @@ impl App {
 
         let is_paused = music_active && !media_is_playing;
         self.update_multitask(&window, now);
+        self.lingosoul
+            .set_screen_height(self.geom.monitor_size.1 as f32);
+        self.lingosoul.set_expanded(self.expanded);
+        self.lingosoul.update(dt);
+        self.serve_assistant_requests();
+        self.sync_chat_focus();
         self.update_lyrics(&window, music_active, is_paused, dt);
         self.update_spring_targets(&window, music_active, is_paused, dt);
         self.update_compact_widget_refresh(&window, now);
@@ -1078,7 +1084,12 @@ impl App {
         } else {
             compact_content_h / 2.0
         };
-        let (target_w, target_h, target_r) = if let Some(size) = self.compact_overlay.target_size(
+        let lingosoul_target = (!self.expanded)
+            .then(|| self.lingosoul.target_size(&self.config, compact_content_h))
+            .flatten();
+        let (target_w, target_h, target_r) = if let Some(size) = lingosoul_target {
+            size
+        } else if let Some(size) = self.compact_overlay.target_size(
             self.config.base_width,
             self.config.base_height,
             self.config.compact_scale,
@@ -1086,6 +1097,11 @@ impl App {
             (size.width, size.height, size.height / 2.0)
         } else {
             (compact_widget_target_w, default_target_h, default_target_r)
+        };
+        let (stiffness, damping) = if lingosoul_target.is_some() || self.lingosoul.wants_glass() {
+            (0.15, 0.72)
+        } else {
+            (0.10, 0.68)
         };
         let target_view = self.target_page_position();
         self.springs
@@ -1107,16 +1123,16 @@ impl App {
                 self.restoring_hide_width = false;
             }
         } else {
-            self.springs.w.update_dt(target_w, 0.10, 0.68, dt);
+            self.springs.w.update_dt(target_w, stiffness, damping, dt);
             self.springs
                 .w
                 .settle(target_w, SETTLE_PIXELS, SETTLE_PIXEL_VELOCITY);
         }
-        self.springs.h.update_dt(target_h, 0.10, 0.68, dt);
+        self.springs.h.update_dt(target_h, stiffness, damping, dt);
         self.springs
             .h
             .settle(target_h, SETTLE_PIXELS, SETTLE_PIXEL_VELOCITY);
-        self.springs.r.update_dt(target_r, 0.10, 0.68, dt);
+        self.springs.r.update_dt(target_r, stiffness, damping, dt);
         self.springs
             .r
             .settle(target_r, SETTLE_PIXELS, SETTLE_PIXEL_VELOCITY);
@@ -1179,6 +1195,8 @@ impl App {
             None
         };
         let transition_active = self.recorder.is_some()
+            || self.lingosoul.is_animating()
+            || self.lingosoul.has_pending_requests()
             || self.springs.any_animating()
             || self.pager_hover_animating()
             || self.compact_overlay.is_timer_finished_animating()

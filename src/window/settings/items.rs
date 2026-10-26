@@ -14,6 +14,7 @@ impl SettingsApp {
             Some(BuiltinPage::Music) => self.build_music_items(),
             Some(BuiltinPage::Widgets) => self.build_widget_items(),
             Some(BuiltinPage::Plugins) => self.build_plugin_items(),
+            Some(BuiltinPage::LingoSoul) => self.build_lingosoul_items(),
             Some(BuiltinPage::About) => self.build_about_items(),
             None => self.build_plugin_settings_items(),
         }

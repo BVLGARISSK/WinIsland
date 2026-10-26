@@ -30,6 +30,7 @@ mod events;
 mod frame;
 mod input;
 mod layout;
+mod lingosoul;
 mod multitask;
 mod pages;
 mod plugin_media;
@@ -174,6 +175,7 @@ pub struct App {
     right_press_cursor: Option<(i32, i32)>,
     is_right_dragging: bool,
     right_drag_start_offset: Option<(i32, i32)>,
+    lingosoul: lingosoul::LingoSoulView,
 }
 
 impl Default for App {
@@ -330,6 +332,7 @@ impl Default for App {
             right_press_cursor: None,
             is_right_dragging: false,
             right_drag_start_offset: None,
+            lingosoul: lingosoul::LingoSoulView::new(),
         }
     }
 }

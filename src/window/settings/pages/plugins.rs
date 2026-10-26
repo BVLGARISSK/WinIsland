@@ -20,7 +20,7 @@ use super::super::{
 };
 
 mod detail;
-mod markdown;
+use crate::ui::markdown;
 
 const PLUGIN_CARD_H: f32 = 76.0;
 const PLUGIN_CARD_GAP: f32 = 10.0;

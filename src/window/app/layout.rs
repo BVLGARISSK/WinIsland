@@ -47,6 +47,10 @@ impl App {
             (self.config.expanded_height + crate::ui::expanded::pager::PAGER_EXTENT)
                 * expanded_scale,
         );
+        let height = self
+            .lingosoul
+            .panel_extent(&self.config)
+            .map_or(height, |panel| height.max(panel));
         WindowSize::new((width + PADDING) as u32, (height + PADDING) as u32)
     }
 

@@ -29,6 +29,7 @@ pub const IFACE_EVENTS: u32 = 0x0f;
 pub const IFACE_MEDIA_SESSION: u32 = 0x10;
 pub const IFACE_SYSTEM: u32 = 0x11;
 pub const IFACE_ACTIVITY: u32 = 0x12;
+pub const IFACE_ASSISTANT: u32 = 0x13;
 pub const IFACE_VERSION_1: u32 = 1;
 
 pub const CAP_CONTEXT: u64 = 1 << 0;
@@ -48,6 +49,7 @@ pub const CAP_EVENTS: u64 = 1 << 13;
 pub const CAP_MEDIA_SESSION: u64 = 1 << 14;
 pub const CAP_SYSTEM: u64 = 1 << 15;
 pub const CAP_ACTIVITY: u64 = 1 << 16;
+pub const CAP_ASSISTANT: u64 = 1 << 17;
 pub const KNOWN_CAPABILITIES_V2: u64 = CAP_CONTEXT
     | CAP_MEDIA
     | CAP_I18N
@@ -64,7 +66,8 @@ pub const KNOWN_CAPABILITIES_V2: u64 = CAP_CONTEXT
     | CAP_EVENTS
     | CAP_MEDIA_SESSION
     | CAP_SYSTEM
-    | CAP_ACTIVITY;
+    | CAP_ACTIVITY
+    | CAP_ASSISTANT;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -154,17 +154,22 @@ impl SharedBackdrop {
         frame: Option<BackdropCaptureFrame>,
         frost_sigma: f32,
     ) -> RenderResult<()> {
-        if let Some(frame) = frame
-            && self
-                .frame
-                .is_none_or(|previous| previous.write_value != frame.write_value)
+        self.frost_sigma = frost_sigma;
+        // A capture update can miss a frame (source moved, magnifier still catching up). The
+        // texture still holds the last copy, so keep drawing it rather than dropping the glass,
+        // which would show the island without its backdrop for that frame.
+        let Some(frame) = frame else {
+            return Ok(());
+        };
+        if self
+            .frame
+            .is_none_or(|previous| previous.write_value != frame.write_value)
         {
             // SAFETY: The fence is live; the queue waits on the GPU for the capture copy.
             unsafe { queue.Wait(&self.write.fence, frame.write_value) }
                 .map_err(|error| format!("Backdrop fence wait failed: {error}"))?;
         }
-        self.frame = frame;
-        self.frost_sigma = frost_sigma;
+        self.frame = Some(frame);
         Ok(())
     }
 

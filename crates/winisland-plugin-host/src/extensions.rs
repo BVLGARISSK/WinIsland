@@ -47,6 +47,15 @@ pub struct Command {
     pub key: u32,
 }
 
+#[derive(Clone)]
+pub struct AssistantTool {
+    pub resource: u64,
+    pub id: String,
+    pub plugin: String,
+    pub description: String,
+    pub schema: String,
+}
+
 pub enum HostRequest {
     Command {
         name: String,
@@ -86,6 +95,9 @@ pub(crate) struct Timer {
 pub(crate) struct State {
     pub callbacks: HashMap<u64, Callback>,
     pub commands: HashMap<u64, Command>,
+    pub assistant_tools: HashMap<u64, AssistantTool>,
+    pub assistant_calls: HashMap<u64, PluginToken>,
+    pub assistant_results: HashMap<u64, (bool, String)>,
     pub pending: HashMap<PluginToken, VecDeque<(u64, Event)>>,
     pub requests: VecDeque<Request>,
     pub workers: HashMap<PluginToken, Thread>,
@@ -152,6 +164,54 @@ impl Extensions {
             .unwrap_or_default();
         commands.sort_by(|a, b| a.id.cmp(&b.id));
         commands
+    }
+
+    pub fn assistant_tools(&self) -> Vec<AssistantTool> {
+        let mut tools = self
+            .state
+            .lock()
+            .map(|state| state.assistant_tools.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        tools.sort_by(|a, b| a.id.cmp(&b.id));
+        tools
+    }
+
+    /// Queues an assistant call to the tool `id`; the plugin answers through `respond`.
+    pub fn call_assistant(&self, id: &str, args: &str) -> Result<u64, PluginStatus> {
+        let mut state = self.state.lock().map_err(|_| PluginStatus::Internal)?;
+        let (resource, token) = state
+            .assistant_tools
+            .values()
+            .find(|tool| tool.id == id)
+            .and_then(|tool| Some((tool.resource, state.callbacks.get(&tool.resource)?.token)))
+            .ok_or(PluginStatus::InvalidArgument)?;
+        state.sequence = state
+            .sequence
+            .checked_add(1)
+            .ok_or(PluginStatus::LimitExceeded)?;
+        let sequence = state.sequence;
+        state.enqueue(
+            resource,
+            Event {
+                kind: EVENT_ASSISTANT,
+                sequence,
+                data: args.as_bytes().to_vec(),
+                ..Default::default()
+            },
+        )?;
+        state.assistant_calls.insert(sequence, token);
+        Ok(sequence)
+    }
+
+    pub fn take_assistant_result(&self, sequence: u64) -> Option<(bool, String)> {
+        self.state.lock().ok()?.assistant_results.remove(&sequence)
+    }
+
+    pub fn cancel_assistant(&self, sequence: u64) {
+        if let Ok(mut state) = self.state.lock() {
+            state.assistant_calls.remove(&sequence);
+            state.assistant_results.remove(&sequence);
+        }
     }
 
     pub fn drain_requests(&self) -> Vec<Request> {
@@ -447,6 +507,18 @@ impl Extensions {
                 .callbacks
                 .retain(|_, callback| callback.token != token);
             state.commands.retain(|id, _| !removed.contains(id));
+            state.assistant_tools.retain(|id, _| !removed.contains(id));
+            let abandoned: Vec<u64> = state
+                .assistant_calls
+                .iter()
+                .filter_map(|(sequence, owner)| (*owner == token).then_some(*sequence))
+                .collect();
+            for sequence in abandoned {
+                state.assistant_calls.remove(&sequence);
+                state
+                    .assistant_results
+                    .insert(sequence, (false, "plugin unloaded".into()));
+            }
             if let Some(queue) = state.pending.remove(&token) {
                 for (_, event) in queue {
                     if let Some((caller, sequence)) = event.completion {

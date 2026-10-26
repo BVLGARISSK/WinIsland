@@ -55,11 +55,12 @@ pub(crate) enum BuiltinPage {
     Music,
     Widgets,
     Plugins,
+    LingoSoul,
     About,
 }
 
 impl BuiltinPage {
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::General,
         Self::Appearance,
         Self::Layout,
@@ -68,6 +69,7 @@ impl BuiltinPage {
         Self::Music,
         Self::Widgets,
         Self::Plugins,
+        Self::LingoSoul,
         Self::About,
     ];
 
@@ -85,6 +87,7 @@ impl BuiltinPage {
             Self::Music => "tab_music",
             Self::Widgets => "tab_widgets",
             Self::Plugins => "tab_plugins",
+            Self::LingoSoul => "tab_lingosoul",
             Self::About => "tab_about",
         }
     }
@@ -204,6 +207,7 @@ pub(crate) enum PluginSettingsRequest {
     Uninstall { id: String },
     Restart,
     ShowGuide,
+    ClearLingoSoulHistory,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1214,7 +1218,7 @@ impl SettingsApp {
         }
     }
 
-    fn request_redraw(&self) {
+    pub(crate) fn request_redraw(&self) {
         if let Some(window) = &self.window {
             window.request_redraw();
         }

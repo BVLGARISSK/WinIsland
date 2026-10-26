@@ -17,6 +17,7 @@ pub enum ResourceKind {
     HostStateSubscription,
     Event,
     Command,
+    AssistantTool,
 }
 
 #[derive(Clone, Copy)]
@@ -48,6 +49,7 @@ fn limits(kind: ResourceKind) -> (usize, usize) {
         ResourceKind::HostStateSubscription => (16, usize::MAX),
         ResourceKind::Event => (128, usize::MAX),
         ResourceKind::Command => (64, usize::MAX),
+        ResourceKind::AssistantTool => (32, usize::MAX),
     }
 }
 

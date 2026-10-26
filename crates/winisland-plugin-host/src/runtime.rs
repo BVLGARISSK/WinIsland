@@ -378,7 +378,7 @@ impl HostRuntime {
         let mut translations = Vec::new();
         for (id, kind) in &revoked {
             match kind {
-                ResourceKind::Event | ResourceKind::Command => {}
+                ResourceKind::Event | ResourceKind::Command | ResourceKind::AssistantTool => {}
                 ResourceKind::Activity => {
                     state.activities.remove(id);
                     state.activity_revision = state.activity_revision.wrapping_add(1);

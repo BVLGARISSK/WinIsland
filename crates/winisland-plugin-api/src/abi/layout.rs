@@ -10,10 +10,10 @@ use crate::types::v2::settings::{
 };
 use crate::types::v2::widget::WidgetSpecV2;
 use crate::types::v2::{
-    ActivitySpecV2, ByteSlice, CommandInfoV2, CommandSpecV2, EventSubscriptionV2, ImageId,
-    InputRegionV2, IslandStateV2, LocalDateTimeV2, LunarDateV2, MediaSessionV2, PluginEventV2,
-    PluginToken, ResourceId, SurfaceSpecV2, TextMetricsV2, TextStyleV2, TimerSpecV2, Utf8Slice,
-    WidgetId,
+    ActivitySpecV2, AssistantToolSpecV2, ByteSlice, CommandInfoV2, CommandSpecV2,
+    EventSubscriptionV2, ImageId, InputRegionV2, IslandStateV2, LocalDateTimeV2, LunarDateV2,
+    MediaSessionV2, PluginEventV2, PluginToken, ResourceId, SurfaceSpecV2, TextMetricsV2,
+    TextStyleV2, TimerSpecV2, Utf8Slice, WidgetId,
 };
 
 macro_rules! assert_layout {
@@ -242,6 +242,15 @@ assert_layout!(
     release = 48
 );
 assert_layout!(
+    AssistantApiV2,
+    40,
+    8,
+    prefix = 0,
+    register = 16,
+    respond = 24,
+    release = 32
+);
+assert_layout!(
     SurfaceApiV2,
     64,
     8,
@@ -344,6 +353,18 @@ assert_layout!(
     hotkey_key = 332,
     callback = 336,
     callback_data = 344
+);
+assert_layout!(
+    AssistantToolSpecV2,
+    616,
+    8,
+    struct_size = 0,
+    flags = 4,
+    key = 8,
+    description = 72,
+    schema = 584,
+    callback = 600,
+    callback_data = 608
 );
 assert_layout!(
     CommandInfoV2,

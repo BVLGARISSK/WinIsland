@@ -64,6 +64,8 @@ pub struct LiquidMaterial {
     pub shadow_spread: f32,
     pub shadow_alpha: f32,
     pub black_fade: f32,
+    pub lingosoul: [f32; 4],
+    pub lingosoul_wave: [f32; 4],
 }
 
 impl LiquidMaterial {
@@ -92,6 +94,8 @@ impl LiquidMaterial {
             shadow_spread: -scale,
             shadow_alpha: 0.22,
             black_fade: 0.0,
+            lingosoul: [0.0; 4],
+            lingosoul_wave: [0.0; 4],
         }
     }
 
@@ -293,6 +297,8 @@ impl<'a> Painter<'a> {
         uniforms.set("shadowAlpha", &[material.shadow_alpha]);
         uniforms.set("opacity", &[opacity]);
         uniforms.set("blackFade", &[material.black_fade.clamp(0.0, 1.0)]);
+        uniforms.set("lingosoul", &material.lingosoul);
+        uniforms.set("lingosoulWave", &material.lingosoul_wave);
         let rim_reach = if backdrop.blur_scale > 1.0 {
             EDGE_REACH
         } else {
@@ -330,6 +336,7 @@ impl<'a> Painter<'a> {
                 .abs()
                 .max(material.shadow_offset.y.abs())
             + 2.0;
+        let margin = margin.max(shape.rect.height() * 0.65 * material.lingosoul[3]);
         let mut paint = Paint::default();
         paint.set_shader(shader);
         self.canvas().draw_rect(

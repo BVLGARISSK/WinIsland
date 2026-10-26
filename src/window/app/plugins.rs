@@ -47,6 +47,8 @@ impl App {
                     }),
             })
             .collect();
+        let mut bindings = bindings;
+        bindings.extend(self.chat_command());
         if bindings != self.plugin_ui.commands || self.tray_installed != self.plugin_ui.tray_ready {
             for (id, error) in crate::platform::shell().set_plugin_commands(&bindings) {
                 log::warn!("Plugin command {id}: {error}");
@@ -62,6 +64,10 @@ impl App {
             self.plugin_ui.tray_ready = self.tray_installed;
         }
         for id in crate::platform::shell().poll_plugin_commands() {
+            if id == super::lingosoul::CHAT_COMMAND {
+                self.open_chat_panel();
+                continue;
+            }
             if let Some(command) = commands.iter().find(|command| command.resource == id) {
                 let _ = extensions.invoke(&command.id, &[]);
             }

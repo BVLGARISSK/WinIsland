@@ -26,6 +26,9 @@ const PRESS_SECS: f32 = 0.26;
 const PULSE_SECS: f32 = 0.45;
 const HOVER_RATE: f32 = 18.0;
 const HOLIDAY_CACHE_LIMIT: usize = 4;
+const HOLIDAYS_TOOL: &str = "month_holidays";
+const HOLIDAYS_DESCRIPTION: &str = "Lists the public holidays and festivals of one month for the user's region, using the calendar shown on the island. Omit year and month for the current month.";
+const HOLIDAYS_SCHEMA: &str = r#"{"type":"object","properties":{"year":{"type":"integer","minimum":1601,"maximum":9999},"month":{"type":"integer","minimum":1,"maximum":12}}}"#;
 const DAY_LABELS: [&str; 31] = [
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17",
     "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31",
@@ -38,7 +41,7 @@ pub fn descriptor() -> PluginDescriptorV2 {
     PluginDescriptorV2 {
         struct_size: std::mem::size_of::<PluginDescriptorV2>() as u32,
         abi_version: ABI_VERSION_2,
-        capabilities: CAP_SURFACE | CAP_INPUT | CAP_EVENTS | CAP_TEXT | CAP_SYSTEM,
+        capabilities: CAP_SURFACE | CAP_INPUT | CAP_EVENTS | CAP_TEXT | CAP_SYSTEM | CAP_ASSISTANT,
         metadata: PluginMetadataC::new(
             ID,
             "Calendar",
@@ -115,9 +118,25 @@ impl Calendar {
                 }
             },
         )?;
+        let mut callbacks = vec![input, timer];
+        if let Ok(assistant) = target.host.assistant() {
+            let host = target.host.clone();
+            match assistant.register(
+                HOLIDAYS_TOOL,
+                HOLIDAYS_DESCRIPTION,
+                HOLIDAYS_SCHEMA,
+                move |args| month_holidays(&host, args).map_err(|error| error.to_string()),
+            ) {
+                Ok(tool) => callbacks.push(tool),
+                Err(error) => target
+                    .host
+                    .log()
+                    .write(2, &format!("Calendar assistant tool unavailable: {error}")),
+            }
+        }
         Ok(Self {
             target: Some(target),
-            callbacks: vec![input, timer],
+            callbacks,
         })
     }
 }
@@ -628,6 +647,36 @@ fn month_at(year: u16, month: u16, offset: i32) -> (u16, u16) {
         index.div_euclid(12).clamp(1601, 9999) as u16,
         index.rem_euclid(12) as u16 + 1,
     )
+}
+
+fn json_number(args: &str, key: &str) -> Option<u16> {
+    let rest = &args[args.find(&format!("\"{key}\""))? + key.len() + 2..];
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+fn month_holidays(host: &Host, args: &str) -> Result<String, Error> {
+    let system = host.system()?;
+    let today = system.local_datetime()?;
+    let year = json_number(args, "year")
+        .filter(|year| (1601..=9999).contains(year))
+        .unwrap_or(today.year);
+    let month = json_number(args, "month")
+        .filter(|month| (1..=12).contains(month))
+        .unwrap_or(today.month);
+    let region = Region::from_lang(&system.current_language()?);
+    let holidays = holidays_for(&system, region, year, month)?;
+    if holidays.is_empty() {
+        return Ok(format!("{year}-{month:02}: no holidays"));
+    }
+    let days: Vec<String> = holidays
+        .iter()
+        .map(|holiday| format!("{year}-{month:02}-{:02} {}", holiday.day, holiday.name))
+        .collect();
+    Ok(days.join("; "))
 }
 
 fn holidays_for(

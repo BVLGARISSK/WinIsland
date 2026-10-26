@@ -28,6 +28,7 @@ const SIDEBAR_ICON_BYTES: [&[u8]; BUILTIN_SIDEBAR_PAGE_COUNT] = [
     include_bytes!("../../../resources/in_app/settings/music.png"),
     include_bytes!("../../../resources/in_app/settings/widget.png"),
     include_bytes!("../../../resources/in_app/settings/plugin.png"),
+    include_bytes!("../../../resources/in_app/settings/lingosoul.png"),
     include_bytes!("../../../resources/in_app/settings/about.png"),
 ];
 
@@ -142,6 +143,7 @@ impl SettingsApp {
                 BuiltinPage::Music as usize,
                 BuiltinPage::Widgets as usize,
                 BuiltinPage::Plugins as usize,
+                BuiltinPage::LingoSoul as usize,
             ],
             &plugin_pages,
             &[BuiltinPage::About as usize],

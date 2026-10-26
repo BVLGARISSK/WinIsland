@@ -67,6 +67,14 @@ pub struct AppConfig {
     pub liquid_glass_siri: bool,
     #[setting(toggle)]
     pub liquid_glass_compat_capture: bool,
+    #[educe(Default = "forever")]
+    #[setting(choice(
+        "forever" => "lingosoul_history_forever",
+        "7" => "lingosoul_history_7d",
+        "30" => "lingosoul_history_30d",
+        "90" => "lingosoul_history_90d",
+    ))]
+    pub lingosoul_history_retention: String,
     #[setting(number(min = 0.0, max = 50.0, step = 1.0))]
     pub glass_blur: f32,
     #[educe(Default = true)]

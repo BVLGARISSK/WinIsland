@@ -1,7 +1,8 @@
 use crate::services::extensions;
 use std::ffi::c_void;
 use winisland_plugin_api::{
-    ActivityApiV2, CommandApiV2, EventsApiV2, InputApiV2, MediaSessionApiV2, SurfaceApiV2,
+    ActivityApiV2, AssistantApiV2, CommandApiV2, EventsApiV2, InputApiV2, MediaSessionApiV2,
+    SurfaceApiV2,
 };
 
 use winisland_plugin_api::abi::{
@@ -32,6 +33,7 @@ pub(crate) struct AbiTables {
     log: LogApiV2,
     input: InputApiV2,
     command: CommandApiV2,
+    assistant: AssistantApiV2,
     surface: SurfaceApiV2,
     events: EventsApiV2,
     media_session: MediaSessionApiV2,
@@ -73,6 +75,12 @@ impl AbiTables {
                 list: Some(extensions::list_commands),
                 execute: Some(extensions::execute_command),
                 release: Some(extensions::release_command),
+            },
+            assistant: AssistantApiV2 {
+                prefix: prefix::<AssistantApiV2>(abi::IFACE_VERSION_1),
+                register: Some(extensions::register_assistant_tool),
+                respond: Some(extensions::respond_assistant),
+                release: Some(extensions::release_assistant_tool),
             },
             surface: SurfaceApiV2 {
                 prefix: prefix::<SurfaceApiV2>(abi::IFACE_VERSION_1),
@@ -175,6 +183,7 @@ impl AbiTables {
         self.system.prefix.context = context;
         self.input.prefix.context = context;
         self.command.prefix.context = context;
+        self.assistant.prefix.context = context;
         self.surface.prefix.context = context;
         self.events.prefix.context = context;
         self.media_session.prefix.context = context;
@@ -209,6 +218,7 @@ unsafe extern "C" fn query(
         abi::IFACE_SYSTEM => (&tables.system as *const SystemApiV2).cast(),
         abi::IFACE_INPUT => (&tables.input as *const InputApiV2).cast(),
         abi::IFACE_COMMAND => (&tables.command as *const CommandApiV2).cast(),
+        abi::IFACE_ASSISTANT => (&tables.assistant as *const AssistantApiV2).cast(),
         abi::IFACE_SURFACE => (&tables.surface as *const SurfaceApiV2).cast(),
         abi::IFACE_EVENTS => (&tables.events as *const EventsApiV2).cast(),
         abi::IFACE_MEDIA_SESSION => (&tables.media_session as *const MediaSessionApiV2).cast(),

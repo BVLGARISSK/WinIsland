@@ -28,9 +28,10 @@ use winisland_core::lyrics::LyricHighlight;
 use winisland_core::multitask::TaskFrame;
 use winisland_plugin_host::draw::replay::PreparedFrame;
 use winisland_plugin_host::host::PluginHost;
+use winisland_render::text::FontManager;
 use winisland_render::{
-    Backdrop, BlurSpec, Image, LiquidMaterial, LiquidShape, Painter, Path, Point, RasterSurface,
-    Rect, Rgba, Vec2,
+    Backdrop, BlurSpec, FontWeight, GradientStop, Image, LiquidMaterial, LiquidShape, Painter,
+    Path, Point, RasterSurface, Rect, Rgba, TileMode, Vec2,
 };
 
 pub struct LayoutParams {
@@ -94,6 +95,9 @@ pub struct StyleParams<'a> {
     pub liquid_backdrop: Option<Backdrop>,
     pub liquid_optics: LiquidOptics,
     pub liquid_siri: bool,
+    pub lingosoul: LingoSoulStyle,
+    pub lingosoul_reply: &'a str,
+    pub lingosoul_chat: Option<&'a crate::ui::lingosoul_chat::ChatPanel>,
     pub use_blur: bool,
     pub font_size: f32,
     pub music_text_y_offset: f32,
@@ -108,6 +112,31 @@ pub struct StyleParams<'a> {
     pub plugin_host: Option<&'a PluginHost>,
     pub compact_widget_layout: &'a [CompactWidgetSlot],
     pub pages: &'a [ExpandedPage],
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LingoSoulStyle {
+    pub drop: f32,
+    pub level: f32,
+    pub phase: f32,
+    pub dots: f32,
+    pub dots_alpha: f32,
+    pub cover: f32,
+    pub unit: f32,
+    pub darken: f32,
+    pub warmup: bool,
+    pub reply: f32,
+    pub beam: f32,
+    pub panel: f32,
+    pub wave_fade: f32,
+    pub wave_intro: f32,
+    pub wave_time: f32,
+}
+
+impl LingoSoulStyle {
+    fn covers_content(&self) -> f32 {
+        self.cover.max((self.drop * 4.0).min(1.0)).clamp(0.0, 1.0)
+    }
 }
 
 pub(crate) use self::mini::MiniContent;
@@ -177,7 +206,9 @@ pub fn draw_island(painter: Painter<'_>, params: DrawIslandParams<'_>) -> bool {
         host.runtime().extensions.begin_frame();
     }
     let (widget_animating, expanded_alpha) = match params.style.liquid_backdrop.as_ref() {
-        Some(backdrop) if params.style.island_style == LIQUID_STYLE => {
+        Some(backdrop)
+            if params.style.island_style == LIQUID_STYLE || params.style.lingosoul.drop > 0.0 =>
+        {
             draw_liquid_island(painter, &params, rect, blur_filter, backdrop)
         }
         _ => {
@@ -186,6 +217,11 @@ pub fn draw_island(painter: Painter<'_>, params: DrawIslandParams<'_>) -> bool {
             draw_island_content(painter, &params, rect, blur_filter)
         }
     };
+    if params.style.lingosoul.warmup
+        && let Some(backdrop) = params.style.liquid_backdrop.as_ref()
+    {
+        warm_liquid_glass(painter, &params, rect, backdrop);
+    }
     draw_island_border(painter, &params);
     multitask::draw_content(
         painter,
@@ -497,7 +533,8 @@ fn draw_island_border(painter: Painter<'_>, params: &DrawIslandParams<'_>) {
     painter.stroke_path(
         &params.surface.outline,
         BORDER_WIDTH * 2.0,
-        Rgba::WHITE.with_alpha((alpha as f32 * opacity) as u8),
+        Rgba::WHITE
+            .with_alpha((alpha as f32 * opacity * (1.0 - params.style.lingosoul.drop)) as u8),
         winisland_render::StrokeCap::Butt,
         winisland_render::StrokeJoin::Miter,
     );
@@ -527,6 +564,12 @@ fn draw_liquid_island(
     if params.style.liquid_siri {
         material.black_fade = 1.0;
     }
+    let lingosoul = params.style.lingosoul;
+    if lingosoul.drop > 0.0 {
+        apply_lingosoul_drop(&mut material, &lingosoul, scale);
+    } else if lingosoul.cover > 0.0 {
+        material.black_fade = material.black_fade.max(lingosoul.cover);
+    }
     if !painter.draw_liquid_glass(backdrop, &shape, &material, 1.0, 1.0) {
         draw_background_layer(painter, params, rect, &params.surface.outline);
     }
@@ -540,8 +583,13 @@ fn draw_island_content(
     blur_filter: Option<BlurSpec>,
 ) -> (bool, f32) {
     let layout = &params.layout;
-    painter.save();
+    let lingosoul = params.style.lingosoul;
+    let base = painter.save();
     painter.clip_path(&params.surface.primary);
+    let cover = lingosoul.covers_content();
+    if cover > 0.0 {
+        painter.save_alpha(((1.0 - cover) * 255.0) as u8);
+    }
 
     if let Some(host) = params.style.plugin_host {
         crate::ui::plugin::draw_layer(
@@ -610,6 +658,266 @@ fn draw_island_content(
         );
         host.runtime().extensions.finish_frame();
     }
-    painter.restore();
+    painter.restore_to(base);
+    if lingosoul.dots_alpha > 0.0 {
+        draw_lingosoul_dots(painter, rect, &lingosoul, 1.0 - layout.hide_progress);
+    }
+    if lingosoul.reply > 0.0 && !params.style.lingosoul_reply.is_empty() {
+        draw_lingosoul_reply(
+            painter,
+            rect,
+            params.style.lingosoul_reply,
+            lingosoul.reply * (1.0 - layout.hide_progress),
+            layout.expanded_scale,
+            &lingosoul,
+        );
+    }
+    if lingosoul.panel > 0.0
+        && let Some(chat) = params.style.lingosoul_chat
+    {
+        chat.draw(
+            painter,
+            rect,
+            layout.expanded_scale,
+            lingosoul.panel * lingosoul.panel * (1.0 - layout.hide_progress),
+            lingosoul.dots,
+        );
+    }
     (widget_animating, expanded_alpha)
+}
+
+fn lerp(from: f32, to: f32, t: f32) -> f32 {
+    from + (to - from) * t
+}
+
+fn apply_lingosoul_drop(material: &mut LiquidMaterial, lingosoul: &LingoSoulStyle, scale: f32) {
+    let t = lingosoul.drop.clamp(0.0, 1.0);
+    material.black_fade = material.black_fade.max(t).max(lingosoul.cover);
+    material.bezel_width = lerp(material.bezel_width, 22.0 * scale, t);
+    material.thickness = lerp(material.thickness, 18.0 * scale, t);
+    material.displacement_factor = lerp(material.displacement_factor, 0.65, t);
+    material.dispersion = lerp(material.dispersion, 0.025, t);
+    material.tint = material
+        .tint
+        .with_alpha((f32::from(material.tint.a()) * (1.0 - 0.8 * t)) as u8);
+    material.legibility *= 1.0 - 0.8 * t;
+    material.light = Vec2::new(
+        lerp(material.light.x, 0.0, t),
+        lerp(material.light.y, -1.0, t),
+    );
+    material.specular_opacity *= 1.0 - t;
+    material.stroke_opacity *= 1.0 - t;
+    material.shadow_offset = Vec2::new(0.0, lerp(material.shadow_offset.y, 20.0 * scale, t));
+    material.shadow_radius = lerp(material.shadow_radius, 28.0 * scale, t);
+    material.shadow_alpha = lerp(material.shadow_alpha, 0.24, t);
+    material.lingosoul = [
+        lingosoul.wave_fade * t,
+        0.0,
+        lingosoul.level,
+        t * (1.0 - lingosoul.darken),
+    ];
+    material.lingosoul_wave = [lingosoul.wave_intro, lingosoul.wave_time, 0.0, 0.0];
+}
+
+fn draw_lingosoul_dots(painter: Painter<'_>, rect: Rect, lingosoul: &LingoSoulStyle, opacity: f32) {
+    const COUNT: usize = 7;
+    let h = if lingosoul.unit > 0.0 {
+        lingosoul.unit.min(rect.height())
+    } else {
+        rect.height()
+    };
+    let center = Point::new(rect.left + h * 0.5, rect.top + rect.height() * 0.5);
+    let ring = h * 0.24;
+    let alpha = lingosoul.dots_alpha * opacity.clamp(0.0, 1.0);
+    let spin = 0.38 * (lingosoul.dots * 1.7).sin();
+    for i in 0..COUNT {
+        let angle =
+            i as f32 / COUNT as f32 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2 + spin;
+        let wave = (lingosoul.dots * 7.0 - i as f32 * std::f32::consts::TAU / COUNT as f32).cos();
+        let pulse = wave.max(0.0).powi(3);
+        let reach = ring * (1.0 + 0.12 * pulse);
+        let dot = Point::new(
+            center.x + angle.cos() * reach,
+            center.y + angle.sin() * reach,
+        );
+        let radius = h * (0.05 + 0.02 * pulse);
+        let strength = alpha * (0.4 + 0.6 * pulse);
+        let halo = radius * 1.6;
+        painter.fill_path_blurred(
+            &Path::rounded_rect(
+                Rect::from_xywh(dot.x - halo, dot.y - halo, halo * 2.0, halo * 2.0),
+                halo,
+            ),
+            Rgba::WHITE.with_alpha((255.0 * strength * 0.55) as u8),
+            BlurSpec {
+                sigma: (radius * 1.1, radius * 1.1),
+                tile: None,
+            },
+        );
+        painter.fill_circle(
+            dot,
+            radius,
+            Rgba::WHITE.with_alpha((255.0 * strength) as u8),
+        );
+    }
+}
+
+fn warm_liquid_glass(
+    painter: Painter<'_>,
+    params: &DrawIslandParams<'_>,
+    rect: Rect,
+    backdrop: &Backdrop,
+) {
+    let scale = params.layout.compact_scale;
+    let shape = LiquidShape {
+        rect: Rect::from_xywh(rect.center_x() - 1.0, rect.center_y() - 1.0, 2.0, 2.0),
+        radius: 1.0,
+        secondary: None,
+        smoothing: 0.0,
+    };
+    let mut material = params
+        .style
+        .liquid_optics
+        .apply(LiquidMaterial::island(scale));
+    apply_lingosoul_drop(&mut material, &params.style.lingosoul, scale);
+    material.lingosoul[0] = 1.0;
+    painter.draw_liquid_glass(backdrop, &shape, &material, 1.0, 1.0 / 255.0);
+}
+
+pub(crate) struct LingoSoulReplyLayout {
+    pub lines: Vec<String>,
+    pub size: f32,
+    pub line_height: f32,
+    pub padding: f32,
+    pub height: f32,
+}
+
+pub(crate) fn lingosoul_reply_layout(text: &str, width: f32, scale: f32) -> LingoSoulReplyLayout {
+    const MAX_LINES: usize = 6;
+    let size = 15.0 * scale;
+    let padding = 20.0 * scale;
+    let line_height = size * 1.4;
+    let mut lines = FontManager::global().wrap_text(
+        text,
+        size,
+        FontWeight::MEDIUM,
+        (width - padding * 2.0).max(size),
+    );
+    lines.truncate(MAX_LINES);
+    let height = padding * 2.0 + line_height * lines.len().max(1) as f32;
+    LingoSoulReplyLayout {
+        lines,
+        size,
+        line_height,
+        padding,
+        height,
+    }
+}
+
+fn draw_lingosoul_reply(
+    painter: Painter<'_>,
+    rect: Rect,
+    text: &str,
+    alpha: f32,
+    scale: f32,
+    lingosoul: &LingoSoulStyle,
+) {
+    let layout = lingosoul_reply_layout(text, rect.width(), scale);
+    let alpha = alpha.clamp(0.0, 1.0);
+    let blur = (1.0 - alpha) * 6.0 * scale;
+    let beam = lingosoul.beam * alpha;
+    let color =
+        Rgba::WHITE.with_alpha((255.0 * alpha * (1.0 - 0.3 * beam * lingosoul.level)) as u8);
+    painter.save();
+    painter.clip_path(&Path::continuous_rounded_rect(
+        rect,
+        crate::utils::shape::expanded_island_radius(rect.width(), rect.height(), scale)
+            .min(rect.height() * 0.36),
+    ));
+    if beam > 0.001 {
+        draw_lingosoul_beam(painter, rect, lingosoul, beam);
+    }
+    for (i, line) in layout.lines.iter().enumerate() {
+        FontManager::global().draw_text_cached(winisland_render::text::DrawTextCachedParams {
+            painter,
+            text: line,
+            x: rect.left + layout.padding,
+            y: rect.top
+                + ((rect.height() - layout.height) * 0.5).max(0.0)
+                + layout.padding
+                + layout.line_height * i as f32
+                + layout.size * 1.05,
+            size: layout.size,
+            weight: FontWeight::MEDIUM,
+            color,
+            blur: (blur > 0.3).then_some(BlurSpec {
+                sigma: (blur, blur),
+                tile: None,
+            }),
+        });
+    }
+    painter.restore();
+}
+
+fn draw_lingosoul_beam(
+    painter: Painter<'_>,
+    rect: Rect,
+    lingosoul: &LingoSoulStyle,
+    strength: f32,
+) {
+    const SLICES: usize = 96;
+    let level = lingosoul.level.clamp(0.0, 1.0);
+    let phase = lingosoul.phase;
+    let h = rect.height();
+    let w = rect.width();
+    let radius = crate::utils::shape::expanded_island_radius(w, h, 1.0).min(h * 0.36);
+    let dim = 0.6;
+    let glow = 0.55 + 0.45 * level;
+    let stop = |offset: f32, c: (f32, f32, f32), alpha: f32, fade: f32| GradientStop {
+        offset,
+        color: Rgba::from_argb(
+            (255.0 * (alpha * fade * glow * strength * dim).clamp(0.0, 1.0)) as u8,
+            c.0 as u8,
+            c.1 as u8,
+            c.2 as u8,
+        ),
+    };
+    let slot = w / SLICES as f32;
+    for i in 0..SLICES {
+        let t = (i as f32 + 0.5) / SLICES as f32;
+        let centre = 1.0 - (t * 2.0 - 1.0).powi(2) * 0.45;
+        let band = 0.5
+            + 0.5
+                * (0.55 * (t * 7.0 + phase * 2.3).sin()
+                    + 0.3 * (t * 12.5 - phase * 3.1).sin()
+                    + 0.15 * (t * 21.0 + phase * 4.7).sin());
+        let value = level * centre * (0.25 + 0.75 * band);
+        let reach = h * (0.1 + 0.34 * value);
+        let x = (rect.left + slot * i as f32).floor();
+        let x_end = (rect.left + slot * (i + 1) as f32).floor();
+        let side = (x + slot * 0.5 - rect.left).min(rect.right - x - slot * 0.5);
+        let lift = if side < radius {
+            let dx = radius - side.max(0.0);
+            radius - (radius * radius - dx * dx).max(0.0).sqrt()
+        } else {
+            0.0
+        };
+        let base = rect.bottom - lift;
+        let corner = (lift / radius.max(1.0)).clamp(0.0, 1.0);
+        let top = base - reach * (1.0 - 0.75 * corner);
+        let fade = 1.0 - 0.6 * corner;
+        let stops = [
+            stop(0.0, (255.0, 232.0, 210.0), 0.9, fade),
+            stop(0.3, (236.0, 239.0, 255.0), 0.7, fade),
+            stop(0.65, (150.0, 160.0, 255.0), 0.28, fade),
+            stop(1.0, (150.0, 160.0, 255.0), 0.0, fade),
+        ];
+        painter.fill_rect_with_gradient(
+            Rect::from_ltrb(x, top, x_end, rect.bottom),
+            Point::new(x, base),
+            Point::new(x, top),
+            &stops,
+            TileMode::Clamp,
+        );
+    }
 }

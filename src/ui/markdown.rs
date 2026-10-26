@@ -4,19 +4,119 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use winisland_render::text::{DrawTextCachedParams, FontManager};
+use winisland_render::text::{DrawTextCachedParams, FontManager, PluginTextParams};
 use winisland_render::{
     FontStyle, FontWeight, Painter, Point, Radius, Rect, Rgba, StrokeCap, Vec2,
 };
 
 const BODY_SIZE: f32 = 12.0;
-const LINE_HEIGHT: f32 = 18.0;
+const LINE_HEIGHT: f32 = 19.0;
+const LINE_SPACING: f32 = 1.6;
 const BLOCK_GAP: f32 = 10.0;
 const CODE_PAD: f32 = 10.0;
-const INDENT: f32 = 18.0;
+const CODE_SIZE: f32 = 11.0;
+const INLINE_CODE_SCALE: f32 = 0.92;
+const INDENT: f32 = 16.0;
+const QUOTE_PAD: f32 = 12.0;
+const TABLE_SIZE: f32 = 11.5;
+const CELL_PAD_X: f32 = 9.0;
+const CELL_PAD_Y: f32 = 6.0;
+const MIN_COLUMN: f32 = 44.0;
+const RADIUS: f32 = 7.0;
+const MONO_FAMILIES: [&str; 3] = ["Cascadia Mono", "Consolas", "Courier New"];
 
 thread_local! {
     static LAYOUT_CACHE: RefCell<HashMap<u64, Rc<MarkdownLayout>>> = RefCell::new(HashMap::new());
+    static MONO_FAMILY: &'static str = MONO_FAMILIES
+        .into_iter()
+        .find(|family| FontManager::global().has_family(family))
+        .unwrap_or("");
+    static MONO_METRICS: RefCell<HashMap<(char, u32), (f32, f32)>> = RefCell::new(HashMap::new());
+}
+
+fn mono_metrics(character: char, size: f32) -> (f32, f32) {
+    MONO_METRICS.with(|cache| {
+        *cache
+            .borrow_mut()
+            .entry((character, size.to_bits()))
+            .or_insert_with(|| {
+                let mut buffer = [0_u8; 4];
+                MONO_FAMILY.with(|family| {
+                    FontManager::global()
+                        .measure_plugin_text(
+                            character.encode_utf8(&mut buffer),
+                            size,
+                            400,
+                            false,
+                            family,
+                        )
+                        .map_or((size * 0.6, size * 0.8), |metrics| {
+                            (metrics.width, metrics.ascent)
+                        })
+                })
+            })
+    })
+}
+
+/// Width of `character` in code: monospace for ASCII, the UI font for anything the
+/// monospace face lacks (CJK and other scripts).
+fn mono_width(character: char, size: f32) -> f32 {
+    if character.is_ascii() {
+        mono_metrics(character, size).0
+    } else {
+        FontManager::global().measure_text_cached(
+            character.encode_utf8(&mut [0_u8; 4]),
+            size,
+            FontStyle::normal(),
+        )
+    }
+}
+
+fn draw_mono(painter: Painter<'_>, text: &str, x: f32, baseline: f32, size: f32, color: Rgba) {
+    let ascent = mono_metrics('M', size).1;
+    let mut x = x;
+    let mut rest = text;
+    while let Some(first) = rest.chars().next() {
+        let ascii = first.is_ascii();
+        let end = rest
+            .char_indices()
+            .find(|(_, c)| c.is_ascii() != ascii)
+            .map_or(rest.len(), |(index, _)| index);
+        let run = &rest[..end];
+        let width: f32 = run.chars().map(|c| mono_width(c, size)).sum();
+        if ascii {
+            MONO_FAMILY.with(|family| {
+                FontManager::global().draw_plugin_text(
+                    PluginTextParams {
+                        painter,
+                        rect: Rect::from_xywh(x, baseline - ascent, width + size, size * 1.5),
+                        size,
+                        italic: false,
+                        family,
+                        align: 0,
+                        wrap: false,
+                        ellipsis: false,
+                    },
+                    run,
+                    400,
+                    color,
+                );
+            });
+        } else {
+            FontManager::global().draw_text_cached(DrawTextCachedParams {
+                painter,
+                text: run,
+                x,
+                y: baseline,
+                size,
+                weight: FontWeight::REGULAR,
+                color,
+                blur: None,
+            });
+        }
+        x += width;
+        rest = &rest[end..];
+    }
 }
 
 #[derive(Clone)]
@@ -111,12 +211,21 @@ enum DrawOp {
         rect: Rect,
         checked: bool,
     },
+    Border {
+        rect: Rect,
+    },
+    Dot {
+        x: f32,
+        y: f32,
+        radius: f32,
+    },
 }
 
 #[derive(Clone, Copy)]
 enum BackgroundKind {
     Code,
     TableHeader,
+    Quote,
 }
 
 #[derive(Clone, Copy)]
@@ -239,7 +348,10 @@ impl MarkdownParser {
                 };
                 self.code = Some((language, String::new()));
             }
-            Tag::List(start) => self.lists.push(start),
+            Tag::List(start) => {
+                self.flush_inline();
+                self.lists.push(start);
+            }
             Tag::Item => {
                 let marker = if let Some(Some(next)) = self.lists.last_mut() {
                     let marker = format!("{next}.");
@@ -314,7 +426,15 @@ impl MarkdownParser {
                 header: self.table_header,
                 cells: std::mem::take(&mut self.table_cells),
             }),
-            TagEnd::TableHead => self.table_header = false,
+            TagEnd::TableHead => {
+                if !self.table_cells.is_empty() {
+                    self.blocks.push(Block::TableRow {
+                        header: true,
+                        cells: std::mem::take(&mut self.table_cells),
+                    });
+                }
+                self.table_header = false;
+            }
             TagEnd::Table
             | TagEnd::HtmlBlock
             | TagEnd::FootnoteDefinition
@@ -420,14 +540,142 @@ impl<'a> LayoutBuilder<'a> {
     }
 
     fn build(mut self, blocks: &[Block]) -> MarkdownLayout {
-        for block in blocks {
-            self.block(block);
+        let mut index = 0;
+        while index < blocks.len() {
+            if matches!(blocks[index], Block::TableRow { .. }) {
+                let end = blocks[index..]
+                    .iter()
+                    .position(|block| !matches!(block, Block::TableRow { .. }))
+                    .map_or(blocks.len(), |offset| index + offset);
+                self.table(&blocks[index..end]);
+                index = end;
+            } else {
+                self.block(&blocks[index]);
+                index += 1;
+            }
         }
         MarkdownLayout {
-            height: self.y.max(LINE_HEIGHT),
+            height: (self.y - BLOCK_GAP).max(LINE_HEIGHT),
             ops: self.ops,
             links: self.links,
         }
+    }
+
+    fn span_width(&self, spans: &[InlineSpan], size: f32, bold: bool) -> f32 {
+        spans
+            .iter()
+            .map(|span| {
+                if span.style.code {
+                    let size = size * INLINE_CODE_SCALE;
+                    span.text.chars().map(|c| mono_width(c, size)).sum::<f32>() + 6.0
+                } else {
+                    let style = if bold || span.style.bold {
+                        FontStyle::from(FontWeight::SEMIBOLD)
+                    } else {
+                        FontStyle::normal()
+                    };
+                    self.fm.measure_text_cached(&span.text, size, style)
+                }
+            })
+            .sum()
+    }
+
+    fn table(&mut self, rows: &[Block]) {
+        let rows: Vec<(bool, &Vec<Vec<InlineSpan>>)> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Block::TableRow { header, cells } => Some((*header, cells)),
+                _ => None,
+            })
+            .collect();
+        let columns = rows
+            .iter()
+            .map(|(_, cells)| cells.len())
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let mut natural = vec![MIN_COLUMN; columns];
+        for (header, cells) in &rows {
+            for (index, cell) in cells.iter().enumerate() {
+                let width = self.span_width(cell, TABLE_SIZE, *header) + CELL_PAD_X * 2.0;
+                natural[index] = natural[index].max(width);
+            }
+        }
+        let total: f32 = natural.iter().sum();
+        let widths: Vec<f32> = if total <= self.width {
+            let extra = (self.width - total) / columns as f32;
+            natural.iter().map(|width| width + extra).collect()
+        } else {
+            let fair = self.width / columns as f32;
+            let small: f32 = natural.iter().filter(|w| **w <= fair).sum();
+            let large: f32 = natural.iter().filter(|w| **w > fair).sum();
+            let room = (self.width - small).max(0.0);
+            natural
+                .iter()
+                .map(|width| {
+                    if *width <= fair {
+                        *width
+                    } else {
+                        width * room / large.max(1.0)
+                    }
+                })
+                .collect()
+        };
+        let top = self.y;
+        for (row, (header, cells)) in rows.iter().enumerate() {
+            let start = self.y;
+            let mut height: f32 = LINE_HEIGHT;
+            let mut x = 0.0;
+            for (index, width) in widths.iter().enumerate() {
+                if let Some(cell) = cells.get(index) {
+                    self.y = start;
+                    self.inline_at(InlineLayout {
+                        spans: cell,
+                        origin: (x + CELL_PAD_X, start + CELL_PAD_Y),
+                        width: width - CELL_PAD_X * 2.0,
+                        size: TABLE_SIZE,
+                        force_bold: *header,
+                        secondary: false,
+                    });
+                    height = height.max(self.y - start - CELL_PAD_Y);
+                }
+                x += width;
+            }
+            let row_height = height + CELL_PAD_Y * 2.0;
+            if *header {
+                self.ops.push(DrawOp::Background {
+                    rect: Rect::from_xywh(0.0, start, self.width, row_height),
+                    kind: BackgroundKind::TableHeader,
+                });
+            }
+            self.y = start + row_height;
+            if row + 1 < rows.len() {
+                self.ops.push(DrawOp::Line {
+                    x1: 0.0,
+                    y1: self.y,
+                    x2: self.width,
+                    y2: self.y,
+                    width: 1.0,
+                    kind: LineKind::Separator,
+                });
+            }
+        }
+        let mut x = 0.0;
+        for width in &widths[..widths.len() - 1] {
+            x += width;
+            self.ops.push(DrawOp::Line {
+                x1: x,
+                y1: top,
+                x2: x,
+                y2: self.y,
+                width: 1.0,
+                kind: LineKind::Separator,
+            });
+        }
+        self.ops.push(DrawOp::Border {
+            rect: Rect::from_xywh(0.0, top, self.width, self.y - top),
+        });
+        self.y += BLOCK_GAP + 2.0;
     }
 
     fn block(&mut self, block: &Block) {
@@ -438,14 +686,17 @@ impl<'a> LayoutBuilder<'a> {
             }
             Block::Heading(level, spans) => {
                 let size = match level {
-                    HeadingLevel::H1 => 22.0,
-                    HeadingLevel::H2 => 19.0,
-                    HeadingLevel::H3 => 16.0,
-                    HeadingLevel::H4 => 14.0,
-                    HeadingLevel::H5 | HeadingLevel::H6 => 13.0,
+                    HeadingLevel::H1 => 18.0,
+                    HeadingLevel::H2 => 16.0,
+                    HeadingLevel::H3 => 14.5,
+                    HeadingLevel::H4 => 13.0,
+                    HeadingLevel::H5 | HeadingLevel::H6 => 12.5,
                 };
+                if self.y > 0.0 {
+                    self.y += 4.0;
+                }
                 self.inline(spans, 0.0, self.width, size, true, false);
-                self.y += BLOCK_GAP + 2.0;
+                self.y += BLOCK_GAP - 3.0;
             }
             Block::ListItem {
                 depth,
@@ -459,13 +710,22 @@ impl<'a> LayoutBuilder<'a> {
                         rect: Rect::from_xywh(indent + 1.0, self.y + 2.0, 10.0, 10.0),
                         checked: *checked,
                     });
+                } else if marker == "•" {
+                    self.ops.push(DrawOp::Dot {
+                        x: indent + 5.0,
+                        y: self.y + BODY_SIZE * 0.62,
+                        radius: if *depth == 0 { 2.4 } else { 2.0 },
+                    });
                 } else {
                     self.ops.push(DrawOp::Text {
                         text: marker.clone(),
-                        x: indent + 1.0,
+                        x: indent,
                         baseline: self.y + BODY_SIZE,
                         size: BODY_SIZE,
-                        style: InlineStyle::default(),
+                        style: InlineStyle {
+                            bold: true,
+                            ..InlineStyle::default()
+                        },
                         secondary: true,
                     });
                 }
@@ -481,14 +741,27 @@ impl<'a> LayoutBuilder<'a> {
             }
             Block::Quote(spans) => {
                 let start = self.y;
-                self.inline(spans, 13.0, self.width - 13.0, BODY_SIZE, false, true);
+                self.y += 6.0;
+                self.inline(
+                    spans,
+                    QUOTE_PAD,
+                    self.width - QUOTE_PAD * 2.0,
+                    BODY_SIZE,
+                    false,
+                    true,
+                );
+                self.y += 6.0;
                 let height = (self.y - start).max(LINE_HEIGHT);
+                self.ops.push(DrawOp::Background {
+                    rect: Rect::from_xywh(0.0, start, self.width, height),
+                    kind: BackgroundKind::Quote,
+                });
                 self.ops.push(DrawOp::Line {
-                    x1: 2.0,
-                    y1: start,
-                    x2: 2.0,
-                    y2: start + height,
-                    width: 2.0,
+                    x1: 1.5,
+                    y1: start + 4.0,
+                    x2: 1.5,
+                    y2: start + height - 4.0,
+                    width: 3.0,
                     kind: LineKind::Quote,
                 });
                 self.y += BLOCK_GAP;
@@ -499,16 +772,18 @@ impl<'a> LayoutBuilder<'a> {
                 if lines.is_empty() {
                     lines.push("");
                 }
-                if let Some(language) = language {
+                self.y += CODE_PAD - 4.0;
+                if let Some(language) = language.as_ref().filter(|language| !language.is_empty()) {
+                    let size = 9.5;
                     self.ops.push(DrawOp::Text {
                         text: language.clone(),
                         x: CODE_PAD,
-                        baseline: self.y + 11.0,
-                        size: 10.0,
+                        baseline: self.y + size,
+                        size,
                         style: InlineStyle::default(),
                         secondary: true,
                     });
-                    self.y += 18.0;
+                    self.y += size + 7.0;
                 }
                 for line in lines {
                     let line = [InlineSpan {
@@ -523,51 +798,19 @@ impl<'a> LayoutBuilder<'a> {
                         spans: &line,
                         origin: (CODE_PAD, self.y),
                         width: self.width - CODE_PAD * 2.0,
-                        size: 11.0,
+                        size: CODE_SIZE,
                         force_bold: false,
                         secondary: false,
                     });
                 }
                 self.ops.push(DrawOp::Background {
-                    rect: Rect::from_xywh(0.0, start - 5.0, self.width, self.y - start + 10.0),
+                    rect: Rect::from_xywh(0.0, start, self.width, self.y - start + CODE_PAD - 4.0),
                     kind: BackgroundKind::Code,
                 });
+                self.y += CODE_PAD - 4.0;
                 self.y += BLOCK_GAP;
             }
-            Block::TableRow { header, cells } => {
-                let start = self.y;
-                let columns = cells.len().max(1);
-                let cell_width = self.width / columns as f32;
-                let mut row_height: f32 = LINE_HEIGHT + 8.0;
-                for (index, cell) in cells.iter().enumerate() {
-                    let before = self.y;
-                    self.inline_at(InlineLayout {
-                        spans: cell,
-                        origin: (index as f32 * cell_width + 6.0, start),
-                        width: cell_width - 12.0,
-                        size: 11.0,
-                        force_bold: *header,
-                        secondary: false,
-                    });
-                    row_height = row_height.max(self.y - before + 8.0);
-                    self.y = start;
-                }
-                if *header {
-                    self.ops.push(DrawOp::Background {
-                        rect: Rect::from_xywh(0.0, start - 4.0, self.width, row_height),
-                        kind: BackgroundKind::TableHeader,
-                    });
-                }
-                self.y = start + row_height;
-                self.ops.push(DrawOp::Line {
-                    x1: 0.0,
-                    y1: self.y,
-                    x2: self.width,
-                    y2: self.y,
-                    width: 1.0,
-                    kind: LineKind::Separator,
-                });
-            }
+            Block::TableRow { .. } => self.table(std::slice::from_ref(block)),
             Block::Rule => {
                 self.y += 5.0;
                 self.ops.push(DrawOp::Line {
@@ -614,7 +857,8 @@ impl<'a> LayoutBuilder<'a> {
         } = params;
         let mut x = start_x;
         let mut baseline = start_y + size;
-        let line_height = size * 1.5;
+        let code_block = spans.iter().any(|span| span.style.code_block);
+        let line_height = size * if code_block { 1.55 } else { LINE_SPACING };
         let max_x = start_x + width;
         for span in spans {
             let mut style = span.style.clone();
@@ -624,6 +868,14 @@ impl<'a> LayoutBuilder<'a> {
             } else {
                 FontStyle::normal()
             };
+            let inline_code = style.code && !style.code_block;
+            let text_size = if inline_code {
+                size * INLINE_CODE_SCALE
+            } else {
+                size
+            };
+            let pad = if inline_code { 3.0 } else { 0.0 };
+            x += pad;
             let mut run = String::new();
             let mut run_width = 0.0;
             let flush = |builder: &mut Self,
@@ -640,7 +892,7 @@ impl<'a> LayoutBuilder<'a> {
                     text,
                     x: run_x,
                     baseline,
-                    size,
+                    size: text_size,
                     style: style.clone(),
                     secondary,
                 });
@@ -672,9 +924,12 @@ impl<'a> LayoutBuilder<'a> {
                     baseline += line_height;
                     continue;
                 }
-                let char_width =
+                let char_width = if style.code {
+                    mono_width(character, text_size)
+                } else {
                     self.fm
-                        .measure_text_cached(&character.to_string(), size, font_style);
+                        .measure_text_cached(&character.to_string(), size, font_style)
+                };
                 if x + run_width + char_width > max_x && (x > start_x || !run.is_empty()) {
                     flush(self, &mut run, &mut run_width, &mut x, baseline);
                     x = start_x;
@@ -687,6 +942,7 @@ impl<'a> LayoutBuilder<'a> {
                 run_width += char_width;
             }
             flush(self, &mut run, &mut run_width, &mut x, baseline);
+            x += pad;
         }
         self.y = self.y.max(baseline - size + line_height);
     }
@@ -725,11 +981,20 @@ pub(crate) fn render(params: MarkdownRenderParams<'_>) -> MarkdownRenderResult {
         if rect.bottom < visible_top || rect.top > visible_bottom {
             continue;
         }
-        let color = match kind {
-            BackgroundKind::Code => colors.code_background,
-            BackgroundKind::TableHeader => colors.quote_background,
+        let (color, radius) = match kind {
+            BackgroundKind::Code => (colors.code_background, Radius::uniform(RADIUS)),
+            BackgroundKind::Quote => (colors.quote_background, Radius::uniform(RADIUS - 2.0)),
+            BackgroundKind::TableHeader => (
+                colors.quote_background,
+                Radius {
+                    top_left: Vec2::new(RADIUS, RADIUS),
+                    top_right: Vec2::new(RADIUS, RADIUS),
+                    bottom_right: Vec2::ZERO,
+                    bottom_left: Vec2::ZERO,
+                },
+            ),
         };
-        painter.fill_round_rect(rect, Radius::uniform(7.0), color);
+        painter.fill_round_rect(rect, radius, color);
     }
     for op in &layout.ops {
         match op {
@@ -753,29 +1018,42 @@ pub(crate) fn render(params: MarkdownRenderParams<'_>) -> MarkdownRenderResult {
                     colors.text
                 };
                 if style.code && !style.code_block {
-                    let width = FontManager::global().measure_text_cached(
-                        text,
-                        *size,
-                        if style.bold {
-                            FontStyle::from(FontWeight::SEMIBOLD)
-                        } else {
-                            FontStyle::normal()
-                        },
-                    );
+                    let width: f32 = text.chars().map(|c| mono_width(c, *size)).sum();
                     painter.fill_round_rect(
                         Rect::from_xywh(
-                            x + op_x - 2.0,
-                            baseline - size - 2.0,
-                            width + 4.0,
-                            size + 6.0,
+                            x + op_x - 3.0,
+                            baseline - size * 1.02,
+                            width + 6.0,
+                            size * 1.42,
                         ),
-                        Radius::uniform(3.0),
+                        Radius::uniform(4.0),
                         colors.code_background,
                     );
                 }
-                draw_text(painter, text, x + op_x, baseline, *size, style, color);
+                if style.code {
+                    draw_mono(painter, text, x + op_x, baseline, *size, color);
+                } else {
+                    draw_text(painter, text, x + op_x, baseline, *size, style, color);
+                }
             }
             DrawOp::Background { .. } => {}
+            DrawOp::Border { rect } => {
+                let rect =
+                    Rect::from_xywh(x + rect.left, y + rect.top, rect.width(), rect.height());
+                if rect.bottom >= visible_top && rect.top <= visible_bottom {
+                    painter.stroke_round_rect(rect, Radius::uniform(RADIUS), 1.0, colors.separator);
+                }
+            }
+            DrawOp::Dot {
+                x: dot_x,
+                y: dot_y,
+                radius,
+            } => {
+                let center = Point::new(x + dot_x, y + dot_y);
+                if center.y >= visible_top && center.y <= visible_bottom {
+                    painter.fill_circle(center, *radius, colors.secondary);
+                }
+            }
             DrawOp::Checkbox { rect, checked } => {
                 let rect =
                     Rect::from_xywh(x + rect.left, y + rect.top, rect.width(), rect.height());
@@ -868,7 +1146,7 @@ fn layout(markdown: &str, width: f32) -> Rc<MarkdownLayout> {
         let blocks = MarkdownParser::new().parse(markdown);
         let layout = Rc::new(LayoutBuilder::new(FontManager::global(), width).build(&blocks));
         let mut cache = cache.borrow_mut();
-        if cache.len() >= 16 {
+        if cache.len() >= 64 {
             cache.clear();
         }
         cache.insert(key, Rc::clone(&layout));

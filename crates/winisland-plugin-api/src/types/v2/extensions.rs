@@ -11,6 +11,9 @@ pub const EVENT_TIMER: u64 = 1 << 5;
 pub const EVENT_COMMAND: u64 = 1 << 6;
 pub const EVENT_RESULT: u64 = 1 << 7;
 pub const EVENT_ALL: u64 = (1 << 8) - 1;
+/// Delivered only to an assistant tool when the assistant calls it: `sequence` identifies the
+/// call and `data` holds the JSON arguments. Answer with `AssistantApiV2::respond`.
+pub const EVENT_ASSISTANT: u64 = 1 << 8;
 
 pub const INPUT_MOVE: u32 = 1;
 pub const INPUT_DOWN: u32 = 2;
@@ -64,6 +67,9 @@ pub const SURFACE_ENABLED: u32 = 1;
 pub const TIMER_VISIBLE_ONLY: u32 = 1;
 pub const COMMAND_ENABLED: u32 = 1;
 pub const COMMAND_TRAY: u32 = 2;
+pub const ASSISTANT_TOOL_ENABLED: u32 = 1;
+pub const ASSISTANT_RESULT_OK: u32 = 0;
+pub const ASSISTANT_RESULT_ERROR: u32 = 1;
 pub const SESSION_PLAYING: u32 = 1;
 pub const SESSION_CURRENT: u32 = 2;
 pub const SESSION_PLUGIN: u32 = 4;
@@ -157,6 +163,20 @@ pub struct CommandSpecV2 {
     pub callback_data: *mut c_void,
 }
 
+/// A tool the voice assistant may call. `key` is unique within the plugin, `description` tells the
+/// model what the tool does, and `schema` is a JSON Schema object for the arguments.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AssistantToolSpecV2 {
+    pub struct_size: u32,
+    pub flags: u32,
+    pub key: [u8; 64],
+    pub description: [u8; 512],
+    pub schema: Utf8Slice,
+    pub callback: Option<PluginEventFnV2>,
+    pub callback_data: *mut c_void,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct CommandInfoV2 {
@@ -218,6 +238,7 @@ sized_default!(
     SurfaceSpecV2,
     CommandSpecV2,
     CommandInfoV2,
+    AssistantToolSpecV2,
     MediaSessionV2,
     IslandStateV2
 );
