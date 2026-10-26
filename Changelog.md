@@ -1,5 +1,13 @@
 # Changelog
 
+### v2.0.0
+- Added LingoSoul, a voice and chat assistant on the island with a wake word, listening and thinking animations, reply cards, and a chat panel with Markdown and saved history
+- LingoSoul can set timers, open apps and websites, control media, check the weather, use plugin tools and MCP servers, and hand tasks to Claude Code or Codex
+- Install, start, and configure LingoSoul in Settings → LingoSoul, including the AI service, API key, wake words, and agent access
+- Swipe down on the island to open the LingoSoul chat
+- Added an assistant API for plugins; the calendar plugin provides holiday lookups
+- Fixed a one-frame black flash in Liquid Glass after the island expands
+
 ### v1.5.3
 - Redesigned the settings window with a translucent sidebar, search, and clearer pages: General, Appearance, Size & Position, Hiding & Interaction, and Notifications & Alerts
 - Added font options: choose any installed font or a font file and adjust the overall weight; regional fonts such as PingFang UI SC/TC follow the interface language automatically
