@@ -75,6 +75,9 @@ pub struct AppConfig {
         "90" => "lingosoul_history_90d",
     ))]
     pub lingosoul_history_retention: String,
+    /// Start the installed LingoSoul agent together with the island.
+    #[setting(toggle)]
+    pub lingosoul_autostart: bool,
     #[setting(number(min = 0.0, max = 50.0, step = 1.0))]
     pub glass_blur: f32,
     #[educe(Default = true)]

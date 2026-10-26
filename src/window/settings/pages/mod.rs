@@ -3,7 +3,7 @@ use winisland_render::{Image, Rect, Rgba};
 
 use crate::utils::settings_ui::items::{
     CONTENT_PADDING, GROUP_INNER_PAD, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT, SettingsItem,
-    stepper_rects,
+    TEXT_FIELD_W, stepper_rects, trailing_control_rect,
 };
 use crate::utils::settings_ui::{ClickResult, hit_test};
 
@@ -73,6 +73,26 @@ impl<A> SettingsPage<A> {
                 label,
                 value,
                 enabled,
+            },
+            action,
+        );
+    }
+
+    pub(crate) fn row_text(
+        &mut self,
+        label: String,
+        value: String,
+        placeholder: String,
+        secret: bool,
+        action: A,
+    ) {
+        self.push_action(
+            SettingsItem::RowText {
+                label,
+                value,
+                placeholder,
+                secret,
+                enabled: true,
             },
             action,
         );
@@ -255,6 +275,23 @@ impl PageInput {
             content_w,
         );
         value.offset(winisland_render::Vec2::new(SIDEBAR_W, 0.0))
+    }
+
+    pub(crate) fn text_field_rect<A>(
+        &self,
+        page: &SettingsPage<A>,
+        item_index: usize,
+        scroll_y: f32,
+    ) -> Rect {
+        let content_w = self.width - CONTENT_PADDING * 2.0;
+        trailing_control_rect(
+            self.row_top(page, item_index, scroll_y),
+            ROW_HEIGHT,
+            content_w,
+            TEXT_FIELD_W,
+            POPUP_BTN_H,
+        )
+        .offset(winisland_render::Vec2::new(SIDEBAR_W, 0.0))
     }
 }
 

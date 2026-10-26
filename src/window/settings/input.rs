@@ -11,6 +11,9 @@ use super::{
     SETTINGS_HEADER_H, SIDEBAR_W, SettingsApp,
 };
 
+/// Longest clipboard text pasted into a settings text field.
+const MAX_PASTE: usize = 2000;
+
 impl SettingsApp {
     pub(crate) fn music_notice_button_hovered(&self) -> bool {
         if self.active_page != MUSIC_PAGE_INDEX || !self.show_music_notice() {
@@ -309,14 +312,48 @@ impl SettingsApp {
             rect,
             text: value,
             on_commit,
+            free_text: false,
         });
         self.request_redraw();
+    }
+
+    /// Starts editing a text field; `on_commit` receives the text on Enter or when focus leaves.
+    pub(crate) fn begin_text_input(
+        &mut self,
+        rect: Rect,
+        value: String,
+        on_commit: NumberInputHandler,
+    ) {
+        self.commit_number_input();
+        self.number_input = Some(NumberInput {
+            rect,
+            text: value,
+            on_commit,
+            free_text: true,
+        });
+        self.sync_text_input();
+        self.request_redraw();
+    }
+
+    /// Appends IME or pasted text to the text field being edited; false when none is.
+    pub(crate) fn insert_input_text(&mut self, text: &str) -> bool {
+        let Some(input) = self.number_input.as_mut().filter(|input| input.free_text) else {
+            return false;
+        };
+        input
+            .text
+            .extend(text.chars().filter(|character| !character.is_control()));
+        self.request_redraw();
+        true
     }
 
     pub(super) fn commit_number_input(&mut self) {
         let Some(input) = self.number_input.take() else {
             return;
         };
+        if input.free_text {
+            self.sync_text_input();
+        }
         let plugin_setting = self.pending_plugin_setting.is_some();
         (input.on_commit)(self, &input.text);
         if !plugin_setting {
@@ -338,8 +375,26 @@ impl SettingsApp {
                 return true;
             }
             Key::Escape => {
+                let free_text = input.free_text;
                 self.number_input = None;
                 self.pending_plugin_setting = None;
+                if free_text {
+                    self.sync_text_input();
+                }
+            }
+            Key::Character(value) if input.free_text && self.ctrl_pressed => {
+                if value.eq_ignore_ascii_case("v")
+                    && let Some(pasted) = crate::platform::shell().clipboard_text(MAX_PASTE)
+                {
+                    input
+                        .text
+                        .extend(pasted.chars().filter(|character| !character.is_control()));
+                }
+            }
+            Key::Character(value) if input.free_text => {
+                input
+                    .text
+                    .extend(value.chars().filter(|character| !character.is_control()));
             }
             Key::Character(value)
                 if value.chars().all(|character| {

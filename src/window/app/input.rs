@@ -576,6 +576,17 @@ impl App {
                 }
                 return;
             }
+            if !self.expanded
+                && drag_axis == Some(DragAxis::Vertical)
+                && dy >= 40
+                && self.springs.hide.value <= 0.3
+                && self.open_chat_by_swipe()
+            {
+                self.hide.manual = false;
+                self.hide.auto = false;
+                self.hide.fullscreen = false;
+                return;
+            }
             if drag_axis == Some(DragAxis::Horizontal) {
                 return;
             }

@@ -61,6 +61,18 @@ impl App {
             Some(crate::window::settings::PluginSettingsRequest::ClearLingoSoulHistory) => {
                 self.clear_lingosoul_history();
             }
+            Some(crate::window::settings::PluginSettingsRequest::ReloadLingoSoul) => {
+                self.reload_lingosoul();
+            }
+            Some(crate::window::settings::PluginSettingsRequest::InstallLingoSoul) => {
+                self.install_lingosoul();
+            }
+            Some(crate::window::settings::PluginSettingsRequest::StartLingoSoul) => {
+                self.start_lingosoul();
+            }
+            Some(crate::window::settings::PluginSettingsRequest::StopLingoSoul) => {
+                self.stop_lingosoul();
+            }
             Some(crate::window::settings::PluginSettingsRequest::LoadMarketplace) => {
                 self.load_plugin_marketplace();
             }

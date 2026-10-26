@@ -20,6 +20,7 @@ pub const STEPPER_ARROW_W: f32 = 18.0;
 
 pub const POPUP_BTN_W: f32 = 112.0;
 pub const POPUP_BTN_H: f32 = 24.0;
+pub const TEXT_FIELD_W: f32 = 240.0;
 pub const POPUP_BTN_R: f32 = 6.0;
 pub const POPUP_ITEM_H: f32 = 32.0;
 pub const POPUP_MENU_R: f32 = 10.0;
@@ -118,6 +119,14 @@ pub enum SettingsItem {
     RowLabel {
         label: String,
     },
+    /// A label with an editable single-line text field; `secret` hides the stored value.
+    RowText {
+        label: String,
+        value: String,
+        placeholder: String,
+        secret: bool,
+        enabled: bool,
+    },
     CenterLink {
         label: String,
         color: Rgba,
@@ -176,6 +185,7 @@ impl SettingsItem {
                 | SettingsItem::RowButton { .. }
                 | SettingsItem::RowAppItem { .. }
                 | SettingsItem::RowLabel { .. }
+                | SettingsItem::RowText { .. }
         )
     }
 }

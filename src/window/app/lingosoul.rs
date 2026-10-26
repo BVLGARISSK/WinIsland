@@ -13,6 +13,7 @@ use winisland_render::{Point, Rect};
 
 use super::App;
 use crate::core::assistant::{AssistantCommand, AssistantLink, AssistantRequest, AssistantState};
+use crate::core::lingosoul_install::{self, AgentProcess};
 use crate::plugin::inventory::InstalledPlugin;
 use crate::ui::island::LingoSoulStyle;
 use crate::ui::lingosoul_chat::{ChatHit, ChatPanel};
@@ -67,6 +68,10 @@ pub(super) struct LingoSoulView {
     screen_h: f32,
     ctrl: bool,
     plugin_calls: Vec<(u64, u64, Instant)>,
+    /// The agent this island started, if any.
+    process: AgentProcess,
+    autostart_tried: bool,
+    status_revision: Option<u64>,
     reply_text: Arc<str>,
     wave_fade: f32,
     wave_intro: f32,
@@ -111,6 +116,9 @@ impl LingoSoulView {
             screen_h: 0.0,
             ctrl: false,
             plugin_calls: Vec::new(),
+            process: AgentProcess::default(),
+            autostart_tried: false,
+            status_revision: None,
             reply_text: Arc::from(""),
             wave_fade: 0.0,
             wave_intro: 0.0,
@@ -620,6 +628,64 @@ impl App {
         }
     }
 
+    /// Stops the agent this island started, then downloads the latest release.
+    pub(super) fn install_lingosoul(&mut self) {
+        self.stop_lingosoul();
+        lingosoul_install::install_latest();
+        self.refresh_history_page();
+    }
+
+    pub(super) fn start_lingosoul(&mut self) {
+        if self.lingosoul.link.is_connected() {
+            return;
+        }
+        if let Err(error) = self.lingosoul.process.start() {
+            log::warn!("Failed to start LingoSoul: {error}");
+        }
+        self.refresh_history_page();
+    }
+
+    /// Asks any connected agent to exit, and ends the one this island started.
+    pub(super) fn stop_lingosoul(&mut self) {
+        self.lingosoul.link.quit();
+        self.lingosoul.process.stop();
+        self.refresh_history_page();
+    }
+
+    /// Starts the agent after an install, or once at launch when no agent is running.
+    fn manage_agent_process(&mut self) {
+        let revision = crate::core::assistant::status_revision();
+        if self.lingosoul.status_revision != Some(revision) {
+            self.lingosoul.status_revision = Some(revision);
+            self.refresh_history_page();
+        }
+        if lingosoul_install::take_installed().is_some() {
+            self.lingosoul.autostart_tried = true;
+            self.start_lingosoul();
+        }
+        if !self.lingosoul.autostart_tried
+            && self.config.lingosoul_autostart
+            && crate::core::assistant::agent_absent()
+        {
+            self.lingosoul.autostart_tried = true;
+            self.start_lingosoul();
+        }
+    }
+
+    /// Tells the assistant that the settings page rewrote its config.
+    pub(super) fn reload_lingosoul(&mut self) {
+        self.lingosoul.link.reload();
+    }
+
+    /// Swiping down on the compact island opens the chat while an assistant is running.
+    pub(super) fn open_chat_by_swipe(&mut self) -> bool {
+        if !self.lingosoul.link.is_connected() {
+            return false;
+        }
+        self.open_chat_panel();
+        true
+    }
+
     /// Clears the chat history from settings; directly on disk when no assistant runs.
     pub(super) fn clear_lingosoul_history(&mut self) {
         if !self.lingosoul.link.clear() {
@@ -637,6 +703,7 @@ impl App {
 
     /// Keeps keyboard focus and the window size in step with the panel.
     pub(super) fn sync_chat_focus(&mut self) {
+        self.manage_agent_process();
         let revision = self.lingosoul.link.chat_revision();
         if self.lingosoul.history_revision != Some(revision) {
             self.lingosoul.history_revision = Some(revision);

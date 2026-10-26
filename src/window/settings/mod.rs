@@ -195,6 +195,8 @@ pub(crate) struct NumberInput {
     pub(crate) rect: winisland_render::Rect,
     pub(crate) text: String,
     pub(crate) on_commit: NumberInputHandler,
+    /// Accepts any text, including IME input and paste, instead of numbers only.
+    pub(crate) free_text: bool,
 }
 
 pub(crate) enum PluginSettingsRequest {
@@ -208,6 +210,10 @@ pub(crate) enum PluginSettingsRequest {
     Restart,
     ShowGuide,
     ClearLingoSoulHistory,
+    ReloadLingoSoul,
+    InstallLingoSoul,
+    StartLingoSoul,
+    StopLingoSoul,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -252,6 +258,7 @@ pub struct SettingsApp {
     pub(crate) sidebar_hover: i32,
     pub(crate) popup: Option<PopupState>,
     pub(crate) number_input: Option<NumberInput>,
+    pub(crate) ctrl_pressed: bool,
     pub(crate) search: search::SearchState,
     pub(crate) is_light: bool,
     pub(crate) cached_items: Vec<SettingsItem>,
@@ -301,6 +308,8 @@ pub struct SettingsApp {
     pub(crate) plugin_settings_error: Option<(u64, String)>,
     pub(crate) pending_plugin_setting: Option<PendingPluginSetting>,
     pub(crate) pending_setting: Option<AppConfigField>,
+    pub(crate) lingosoul_field: Option<pages::lingosoul::LingoSoulField>,
+    pub(crate) lingosoul_choice: Option<pages::lingosoul::LingoSoulChoice>,
     plugin_request: Option<PluginSettingsRequest>,
     close_requested: bool,
 }
@@ -387,6 +396,7 @@ impl SettingsApp {
             sidebar_hover: -1,
             popup: None,
             number_input: None,
+            ctrl_pressed: false,
             search: search::SearchState::default(),
             is_light: false,
             cached_items: Vec::new(),
@@ -436,6 +446,8 @@ impl SettingsApp {
             plugin_settings_error: None,
             pending_plugin_setting: None,
             pending_setting: None,
+            lingosoul_field: None,
+            lingosoul_choice: None,
             plugin_request: None,
             close_requested: false,
         }
@@ -676,8 +688,13 @@ impl SettingsApp {
                     self.handle_pressed_key(&key);
                 }
             }
+            PlatformEvent::ModifiersChanged { modifiers, .. } => {
+                self.ctrl_pressed = modifiers & winisland_plugin_api::MOD_CONTROL != 0;
+            }
             PlatformEvent::ImeCommit { text, .. } => {
-                self.insert_search_text(&text);
+                if !self.insert_input_text(&text) {
+                    self.insert_search_text(&text);
+                }
             }
             PlatformEvent::ImeComposition { text, .. } => self.set_search_composition(&text),
             PlatformEvent::CursorMoved { position, .. } => self.handle_cursor_moved(position),

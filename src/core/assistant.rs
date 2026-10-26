@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -6,6 +7,56 @@ use serde_json::Value;
 
 const PIPE_NAME: &str = r"\\.\pipe\winisland-lingosoul";
 const RECONNECT_DELAY: Duration = Duration::from_millis(1500);
+/// Version of the pipe messages this island understands.
+pub const PROTOCOL: u64 = 1;
+
+/// What the settings page shows about the agent at the other end of the pipe.
+#[derive(Clone, Default, PartialEq)]
+pub struct AgentStatus {
+    pub connected: bool,
+    pub version: Option<String>,
+    pub protocol: Option<u64>,
+    /// First-run model download: progress from 0 to 1, or the error that stopped it.
+    pub setup: Option<Result<f32, String>>,
+}
+
+static STATUS: Mutex<AgentStatus> = Mutex::new(AgentStatus {
+    connected: false,
+    version: None,
+    protocol: None,
+    setup: None,
+});
+static STATUS_REVISION: AtomicU64 = AtomicU64::new(0);
+/// Failed attempts to reach an agent since the link started.
+static MISSED: AtomicU32 = AtomicU32::new(0);
+
+pub fn agent_status() -> AgentStatus {
+    STATUS
+        .lock()
+        .map(|status| status.clone())
+        .unwrap_or_default()
+}
+
+pub fn status_revision() -> u64 {
+    STATUS_REVISION.load(Ordering::Acquire)
+}
+
+/// Whether the link has looked for an agent at least twice without finding one.
+pub fn agent_absent() -> bool {
+    MISSED.load(Ordering::Acquire) >= 2
+}
+
+fn update_status(edit: impl FnOnce(&mut AgentStatus)) {
+    let changed = STATUS.lock().is_ok_and(|mut status| {
+        let before = status.clone();
+        edit(&mut status);
+        *status != before
+    });
+    if changed {
+        STATUS_REVISION.fetch_add(1, Ordering::AcqRel);
+        crate::platform::wake();
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AssistantState {
@@ -165,6 +216,16 @@ impl AssistantLink {
         self.send(&serde_json::json!({"type": "retention", "days": days}))
     }
 
+    /// Asks the agent to exit.
+    pub fn quit(&self) -> bool {
+        self.send(&serde_json::json!({"type": "quit"}))
+    }
+
+    /// Asks the agent to read its config file again after the settings page changed it.
+    pub fn reload(&self) -> bool {
+        self.send(&serde_json::json!({"type": "reload"}))
+    }
+
     pub fn reply(&self, id: u64, mut body: Value) {
         body["type"] = "reply".into();
         body["id"] = id.into();
@@ -206,6 +267,7 @@ fn run(shared: &Shared) {
             if let Ok(mut writer) = shared.writer.lock() {
                 *writer = inbound;
             }
+            update_status(|status| status.connected = true);
             for line in BufReader::new(pipe).lines() {
                 let Ok(line) = line else { break };
                 let Ok(value) = serde_json::from_str::<Value>(&line) else {
@@ -220,6 +282,9 @@ fn run(shared: &Shared) {
                 *writer = None;
             }
             publish(shared, AssistantSnapshot::default());
+            update_status(|status| *status = AgentStatus::default());
+        } else if MISSED.fetch_add(1, Ordering::AcqRel) == 1 {
+            crate::platform::wake();
         }
         std::thread::sleep(RECONNECT_DELAY);
     }
@@ -227,10 +292,25 @@ fn run(shared: &Shared) {
 
 fn handle(shared: &Shared, value: &Value) {
     if let Some(voice) = value.pointer("/hello/voice").and_then(Value::as_bool) {
+        update_status(|status| {
+            status.version = value
+                .pointer("/hello/version")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            status.protocol = value.pointer("/hello/protocol").and_then(Value::as_u64);
+        });
         shared
             .voice
             .store(voice, std::sync::atomic::Ordering::Release);
         crate::platform::wake();
+        return;
+    }
+    if let Some(setup) = value.get("setup") {
+        let next = match setup.get("error").and_then(Value::as_str) {
+            Some(error) => Err(error.to_owned()),
+            None => Ok(setup.get("progress").and_then(Value::as_f64).unwrap_or(0.0) as f32),
+        };
+        update_status(|status| status.setup = Some(next));
         return;
     }
     if let Some(command) = parse_command(value) {
@@ -317,15 +397,7 @@ fn parse(value: &Value) -> Option<AssistantSnapshot> {
 
 /// The assistant's chat history file, next to its config.
 pub fn history_path() -> std::path::PathBuf {
-    let config = std::env::var_os("LINGOSOUL_CONFIG").map_or_else(
-        || {
-            std::path::PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
-                .join(".winisland-lingosoul")
-                .join("config.toml")
-        },
-        std::path::PathBuf::from,
-    );
-    config.with_file_name("history.jsonl")
+    crate::core::lingosoul_config::config_path().with_file_name("history.jsonl")
 }
 
 pub fn read_history() -> Vec<ChatMessage> {

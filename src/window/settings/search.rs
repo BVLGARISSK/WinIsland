@@ -118,9 +118,14 @@ impl SettingsApp {
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        let area = self.search.focused.then(|| {
+        let field = self
+            .number_input
+            .as_ref()
+            .filter(|input| input.free_text)
+            .map(|input| input.rect);
+        let area = (self.search.focused || field.is_some()).then(|| {
             let scale = self.window_scale();
-            let rect = self.search_rect();
+            let rect = field.unwrap_or_else(|| self.search_rect());
             winisland_platform::Rect {
                 left: (rect.left * scale) as i32,
                 top: (rect.top * scale) as i32,

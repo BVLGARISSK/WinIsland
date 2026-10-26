@@ -16,8 +16,9 @@ use crate::utils::color::SettingsTheme;
 use crate::utils::color::settings_color;
 
 use super::super::items::{
-    CONTENT_PADDING, GROUP_INNER_PAD, GROUP_RADIUS, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT,
-    SettingsItem, TOGGLE_H, TOGGLE_W, picker_button_rects, stepper_rects, trailing_control_rect,
+    CONTENT_PADDING, GROUP_INNER_PAD, GROUP_RADIUS, POPUP_BTN_H, POPUP_BTN_R, POPUP_BTN_W,
+    ROW_HEIGHT, SettingsItem, TEXT_FIELD_W, TOGGLE_H, TOGGLE_W, picker_button_rects, stepper_rects,
+    trailing_control_rect,
 };
 use super::controls::{
     PillBtnParams, SettingsPainter, StepperParams, draw_pill_btn, draw_row_separator, draw_stepper,
@@ -314,6 +315,112 @@ fn draw_row_button(
         });
     }
 
+    advance_group_row(ctx, y + ROW_HEIGHT, groups, visible);
+}
+
+/// What a stored secret shows when not being edited: its last four characters.
+fn masked(value: &str) -> String {
+    let tail: String = value
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("••••••{tail}")
+}
+
+struct TextFieldRow<'a> {
+    label: &'a str,
+    value: &'a str,
+    placeholder: &'a str,
+    secret: bool,
+    enabled: bool,
+}
+
+fn draw_row_text_field(
+    ctx: &ItemCtx,
+    y: f32,
+    row: &TextFieldRow<'_>,
+    active: &Option<ActiveStepperValue>,
+    groups: &mut GroupRows,
+) {
+    let painter = ctx.painter;
+    let theme = ctx.theme;
+    let (cy, visible) = draw_row_text(
+        ctx,
+        y,
+        ROW_HEIGHT,
+        row.label,
+        row_text_color(ctx, row.enabled),
+    );
+    if visible {
+        let field = trailing_control_rect(y, ROW_HEIGHT, ctx.content_w, TEXT_FIELD_W, POPUP_BTN_H);
+        let editing = active.as_ref().filter(|input| {
+            (input.rect.left - field.left).abs() < 0.5 && (input.rect.top - field.top).abs() < 0.5
+        });
+        painter.fill_round_rect(
+            field,
+            Radius::uniform(POPUP_BTN_R),
+            settings_color(theme.field_bg),
+        );
+        painter.stroke_round_rect(
+            field,
+            Radius::uniform(POPUP_BTN_R),
+            1.0,
+            settings_color(if editing.is_some() {
+                theme.accent
+            } else {
+                theme.button_border
+            }),
+        );
+        let (text, color) = match editing {
+            Some(input) => (input.text.to_owned(), theme.text_pri),
+            None if row.value.is_empty() => (row.placeholder.to_owned(), theme.text_sec),
+            None if row.secret => (masked(row.value), theme.text_pri),
+            None => (row.value.to_owned(), theme.text_pri),
+        };
+        let fm = FontManager::global();
+        let inner = field.inset(8.0);
+        let width = fm.measure_text_cached(&text, 12.0, FontStyle::normal());
+        let shift = if editing.is_some() {
+            (width - inner.width() + 4.0).max(0.0)
+        } else {
+            0.0
+        };
+        painter.save();
+        painter.clip_rect(Rect::from_ltrb(
+            inner.left,
+            field.top,
+            inner.right,
+            field.bottom,
+        ));
+        let shown = if editing.is_some() {
+            text
+        } else {
+            ellipsize_text(fm, &text, 12.0, FontStyle::normal(), inner.width())
+        };
+        fm.draw_str(
+            painter,
+            &shown,
+            Point::new(inner.left - shift, text_baseline(cy, 12.0)),
+            12.0,
+            FontWeight::REGULAR,
+            settings_color(if row.enabled { color } else { theme.text_sec }),
+        );
+        if editing.is_some_and(|input| input.show_caret) {
+            let caret_x = inner.left - shift + width + 1.0;
+            painter.stroke_line(
+                Point::new(caret_x, field.top + 5.0),
+                Point::new(caret_x, field.bottom - 5.0),
+                1.0,
+                settings_color(theme.accent),
+                StrokeCap::Butt,
+            );
+        }
+        painter.restore();
+    }
     advance_group_row(ctx, y + ROW_HEIGHT, groups, visible);
 }
 
@@ -627,6 +734,27 @@ pub fn draw_items(params: DrawItemsParams<'_>) {
             }
             SettingsItem::RowLabel { label } => {
                 draw_row_label(&ctx, y, label, &mut groups);
+            }
+            SettingsItem::RowText {
+                label,
+                value,
+                placeholder,
+                secret,
+                enabled,
+            } => {
+                draw_row_text_field(
+                    &ctx,
+                    y,
+                    &TextFieldRow {
+                        label,
+                        value,
+                        placeholder,
+                        secret: *secret,
+                        enabled: *enabled,
+                    },
+                    &active_stepper_value,
+                    &mut groups,
+                );
             }
             SettingsItem::CenterLink { label, color } => {
                 draw_center_link(&ctx, y, item.height(), label, *color);
