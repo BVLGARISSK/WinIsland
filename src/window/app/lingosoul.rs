@@ -34,6 +34,8 @@ const PLUGIN_CALL_TIMEOUT: Duration = Duration::from_secs(25);
 const MAX_PASTE: usize = 4000;
 /// A second tap within this window counts as a double tap.
 const DOUBLE_TAP: Duration = Duration::from_millis(320);
+/// How often the island looks for a new LingoSoul release.
+const UPDATE_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 /// Synthetic command id for the tray item and hotkey that open the chat panel.
 pub(super) const CHAT_COMMAND: u64 = u64::MAX;
 
@@ -71,6 +73,8 @@ pub(super) struct LingoSoulView {
     /// The agent this island started, if any.
     process: AgentProcess,
     autostart_tried: bool,
+    /// When the island last looked for a LingoSoul update.
+    update_checked: Option<Instant>,
     status_revision: Option<u64>,
     reply_text: Arc<str>,
     wave_fade: f32,
@@ -118,6 +122,7 @@ impl LingoSoulView {
             plugin_calls: Vec::new(),
             process: AgentProcess::default(),
             autostart_tried: false,
+            update_checked: None,
             status_revision: None,
             reply_text: Arc::from(""),
             wave_fade: 0.0,
@@ -659,6 +664,25 @@ impl App {
             self.lingosoul.status_revision = Some(revision);
             self.refresh_history_page();
         }
+        if self.config.lingosoul_auto_update
+            && self
+                .lingosoul
+                .update_checked
+                .is_none_or(|at| at.elapsed() >= UPDATE_INTERVAL)
+            && lingosoul_install::agent_exe().is_some()
+        {
+            self.lingosoul.update_checked = Some(Instant::now());
+            lingosoul_install::check_update();
+        }
+        // Updating restarts the agent, so wait until it is not in a conversation.
+        if lingosoul_install::update_pending()
+            && self.lingosoul.raw == AssistantState::Idle
+            && !self.lingosoul.panel_open
+            && let Some(version) = lingosoul_install::take_update()
+        {
+            log::info!("Updating LingoSoul to {version}");
+            self.install_lingosoul();
+        }
         if lingosoul_install::take_installed().is_some() {
             self.lingosoul.autostart_tried = true;
             self.start_lingosoul();
@@ -666,6 +690,7 @@ impl App {
         if !self.lingosoul.autostart_tried
             && self.config.lingosoul_autostart
             && crate::core::assistant::agent_absent()
+            && lingosoul_install::agent_exe().is_some()
         {
             self.lingosoul.autostart_tried = true;
             self.start_lingosoul();

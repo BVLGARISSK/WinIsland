@@ -260,13 +260,6 @@ fn build_config_sections(page: &mut SettingsPage<LingoSoulAction>, config: &Ling
                 LingoSoulField::BaseUrl,
             );
         }
-        row_field(
-            page,
-            config,
-            "lingosoul_llm_proxy",
-            "lingosoul_llm_proxy_hint",
-            LingoSoulField::Proxy,
-        );
         page.group_end();
 
         page.section(tr("lingosoul_tools_title"));
@@ -289,6 +282,18 @@ fn build_config_sections(page: &mut SettingsPage<LingoSoulAction>, config: &Ling
         }
         page.group_end();
     }
+
+    page.section(tr("lingosoul_network_title"));
+    page.group_start();
+    row_field(
+        page,
+        config,
+        "lingosoul_llm_proxy",
+        "lingosoul_llm_proxy_hint",
+        LingoSoulField::Proxy,
+    );
+    page.row_label(tr("lingosoul_network_note"));
+    page.group_end();
 
     page.section(tr("lingosoul_agents_title"));
     page.group_start();
@@ -486,6 +491,7 @@ impl SettingsApp {
             LingoSoulAction::Process,
         );
         page.setting(&self.config, AppConfigField::LingosoulAutostart, true);
+        page.setting(&self.config, AppConfigField::LingosoulAutoUpdate, true);
         page.group_end();
     }
 

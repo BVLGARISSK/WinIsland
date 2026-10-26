@@ -30,6 +30,7 @@ pub enum InstallState {
 }
 
 static STATE: Mutex<InstallState> = Mutex::new(InstallState::Idle);
+static UPDATE: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Deserialize)]
 struct Release {
@@ -107,6 +108,58 @@ pub fn install_latest() {
     }
 }
 
+/// Looks for a release newer than the installed one in the background; `take_update`
+/// reports it once.
+pub fn check_update() {
+    let Some(installed) = installed_version() else {
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("lingosoul-update".into())
+        .spawn(move || {
+            let latest = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())
+                .and_then(|runtime| runtime.block_on(async { latest_release(&client()?).await }));
+            match latest {
+                Ok(release) => {
+                    let version = release.tag_name.trim_start_matches('v').to_owned();
+                    if is_newer(&version, &installed) {
+                        log::info!("LingoSoul {version} is available (installed {installed})");
+                        if let Ok(mut update) = UPDATE.lock() {
+                            *update = Some(version);
+                        }
+                        crate::platform::wake();
+                    }
+                }
+                Err(error) => log::info!("LingoSoul update check failed: {error}"),
+            }
+        });
+    if let Err(error) = spawned {
+        log::warn!("Failed to start the LingoSoul update check: {error}");
+    }
+}
+
+pub fn update_pending() -> bool {
+    UPDATE.lock().is_ok_and(|update| update.is_some())
+}
+
+pub fn take_update() -> Option<String> {
+    UPDATE.lock().ok()?.take()
+}
+
+/// Compares dotted version numbers; a part that is not a number counts as zero.
+fn is_newer(candidate: &str, current: &str) -> bool {
+    let parts = |version: &str| -> Vec<u64> {
+        version
+            .split('.')
+            .map(|part| part.trim().parse().unwrap_or(0))
+            .collect()
+    };
+    parts(candidate) > parts(current)
+}
+
 fn install() -> Result<String, String> {
     let dir = install_dir().ok_or("no local app data folder")?;
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -121,13 +174,18 @@ fn install() -> Result<String, String> {
     Ok(version)
 }
 
-async fn download() -> Result<(String, Vec<u8>), String> {
-    let client = reqwest::Client::builder()
+fn client() -> Result<reqwest::Client, String> {
+    // The proxy set for LingoSoul also covers downloading it.
+    let proxy = crate::core::lingosoul_config::LingoSoulConfig::load().text("llm", "proxy");
+    crate::utils::proxy::apply(reqwest::Client::builder(), &proxy)
         .timeout(Duration::from_secs(120))
         .user_agent("WinIsland-LingoSoul")
         .build()
-        .map_err(|error| error.to_string())?;
-    let release: Release = client
+        .map_err(|error| error.to_string())
+}
+
+async fn latest_release(client: &reqwest::Client) -> Result<Release, String> {
+    client
         .get(RELEASE_URL)
         .send()
         .await
@@ -135,7 +193,12 @@ async fn download() -> Result<(String, Vec<u8>), String> {
         .map_err(|error| error.to_string())?
         .json()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+async fn download() -> Result<(String, Vec<u8>), String> {
+    let client = client()?;
+    let release = latest_release(&client).await?;
     let asset = release
         .assets
         .iter()

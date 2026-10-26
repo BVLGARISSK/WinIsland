@@ -5,6 +5,7 @@ pub(crate) mod cover;
 pub(crate) mod fonts;
 pub mod logger;
 pub mod mouse;
+pub(crate) mod proxy;
 pub(crate) mod recorder;
 pub mod scroll;
 pub mod settings_ui;

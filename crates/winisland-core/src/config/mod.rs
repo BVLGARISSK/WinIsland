@@ -78,6 +78,10 @@ pub struct AppConfig {
     /// Start the installed LingoSoul agent together with the island.
     #[setting(toggle)]
     pub lingosoul_autostart: bool,
+    /// Install new LingoSoul releases automatically while it is idle.
+    #[educe(Default = true)]
+    #[setting(toggle)]
+    pub lingosoul_auto_update: bool,
     #[setting(number(min = 0.0, max = 50.0, step = 1.0))]
     pub glass_blur: f32,
     #[educe(Default = true)]

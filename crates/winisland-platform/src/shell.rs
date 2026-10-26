@@ -54,6 +54,8 @@ pub trait ShellIntegration {
     fn clipboard_sequence(&self) -> u32;
     /// Reads up to `max_chars` of clipboard text; `None` when no text is available.
     fn clipboard_text(&self, max_chars: usize) -> Option<String>;
+    /// The system HTTP proxy as a URL when one is switched on; `None` otherwise.
+    fn system_proxy(&self) -> Option<String>;
     /// Registers a system-wide hotkey, or returns an unavailable/backend error.
     fn register_hotkey(&self, hotkey: Hotkey) -> Result<(), PlatformError>;
     /// Drains presses of the registered hotkey; zero means no press.

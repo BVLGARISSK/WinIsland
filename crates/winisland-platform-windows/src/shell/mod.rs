@@ -9,6 +9,7 @@ mod locale;
 mod lunar;
 mod paths;
 pub(crate) mod plugin_commands;
+mod proxy;
 mod tray;
 mod update;
 
@@ -129,6 +130,9 @@ impl ShellIntegration for WindowsShell {
     }
     fn clipboard_text(&self, max_chars: usize) -> Option<String> {
         clipboard::text(max_chars)
+    }
+    fn system_proxy(&self) -> Option<String> {
+        proxy::system()
     }
     fn register_hotkey(&self, hotkey: Hotkey) -> Result<(), PlatformError> {
         hotkey::register(hotkey)

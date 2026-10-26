@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use winisland_core::i18n::tr;
 
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
+    crate::utils::proxy::apply(reqwest::Client::builder(), "")
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("WinIsland-Updater")
         .build()
