@@ -312,7 +312,15 @@ fn panic_hook(info: &PanicHookInfo) {
 
 pub fn init() -> Result<(), SetLoggerError> {
     let path = log_file_path();
-    let state = LogFile::open(path).expect("Failed to open log file");
+    let state = LogFile::open(path.clone()).unwrap_or_else(|error| {
+        eprintln!("Failed to open log file {}: {error}", path.display());
+        let fallback = std::env::temp_dir().join(format!("WinIsland-{}.log", std::process::id()));
+        LogFile::open(fallback).unwrap_or(LogFile {
+            path,
+            writer: None,
+            bytes_written: 0,
+        })
+    });
 
     let logger = FileLogger {
         state: Mutex::new(state),
