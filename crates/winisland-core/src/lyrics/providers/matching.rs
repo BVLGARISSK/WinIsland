@@ -102,13 +102,13 @@ impl SongQuery {
         }
         let duration_match = self.duration_secs > 0
             && duration_secs.is_some_and(|duration| duration.abs_diff(self.duration_secs) <= 5);
-        if !self.artist.trim().is_empty()
-            && !artist_match
-            && (!artists.is_empty() || !duration_match || title_score < 280)
-        {
-            return None;
-        }
-        if title_score < 260 && !artist_match && !duration_match {
+        // A shared title is not evidence of the same song: without a matching artist, only a
+        // matching duration can confirm it, and only when the player reports no artist.
+        if self.artist.trim().is_empty() {
+            if !duration_match {
+                return None;
+            }
+        } else if !artist_match {
             return None;
         }
         let duration_score = if duration_match { 30 } else { 0 };

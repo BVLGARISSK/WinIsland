@@ -67,7 +67,11 @@ impl SettingsApp {
                     true,
                     MusicAction::LyricsFolder,
                 );
-                page.setting(&self.config, AppConfigField::ShowSecondaryLyrics, true);
+                // The secondary-lyrics toggle below depends on this, so LRC mode must offer it too.
+                page.setting(&self.config, AppConfigField::ShowLyrics, true);
+                if show_lyrics {
+                    page.setting(&self.config, AppConfigField::ShowSecondaryLyrics, true);
+                }
             } else {
                 page.setting(&self.config, AppConfigField::ShowLyrics, true);
                 if show_lyrics {
