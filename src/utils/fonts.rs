@@ -17,11 +17,12 @@ const SIMPLIFIED: Region = Region {
 
 fn current_region() -> Region {
     let language = winisland_core::i18n::current_lang();
-    let locale = if language.starts_with("zh") {
-        language
-    } else {
-        crate::platform::shell().locale()
-    };
+    let locale =
+        if language.starts_with("zh") || language.starts_with("ja") || language.starts_with("ko") {
+            language
+        } else {
+            crate::platform::shell().locale()
+        };
     let mut subtags = locale.split(['-', '_']);
     let primary = subtags.next().unwrap_or_default().to_ascii_lowercase();
     let subtags: Vec<&str> = subtags.collect();

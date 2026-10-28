@@ -44,6 +44,18 @@ fn embedded_langs() -> &'static [EmbeddedLang] {
             "es_es.lang",
             include_str!("../../../../resources/in_app/lang/es_es.lang"),
         ),
+        (
+            "zh_tw.lang",
+            include_str!("../../../../resources/in_app/lang/zh_tw.lang"),
+        ),
+        (
+            "ja_jp.lang",
+            include_str!("../../../../resources/in_app/lang/ja_jp.lang"),
+        ),
+        (
+            "ko_kr.lang",
+            include_str!("../../../../resources/in_app/lang/ko_kr.lang"),
+        ),
     ]
 }
 
@@ -168,7 +180,12 @@ impl I18n {
     pub fn load(&mut self, lang: &str) {
         if let Some(content) = self.load_file_content(lang) {
             self.current_lang = lang.to_string();
-            self.translations = parse_translations(&content);
+            self.translations = embedded_langs()
+                .iter()
+                .find(|(filename, _)| *filename == "en_us.lang")
+                .map(|(_, content)| parse_translations(content))
+                .unwrap_or_default();
+            self.translations.extend(parse_translations(&content));
         }
     }
 
@@ -269,7 +286,22 @@ fn get_system_lang() -> String {
     };
     let lower = provider().to_lowercase();
     if lower.starts_with("zh") {
-        return "zh_cn".to_string();
+        return if lower.contains("tw")
+            || lower.contains("hk")
+            || lower.contains("mo")
+            || lower.contains("hant")
+        {
+            "zh_tw"
+        } else {
+            "zh_cn"
+        }
+        .to_string();
+    }
+    if lower.starts_with("ja") {
+        return "ja_jp".to_string();
+    }
+    if lower.starts_with("ko") {
+        return "ko_kr".to_string();
     }
     if lower.starts_with("es") {
         return "es_es".to_string();
