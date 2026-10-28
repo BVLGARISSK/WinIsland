@@ -11,16 +11,17 @@ use winisland_plugin_api::types::v2::{PluginToken, ResourceId, Utf8Slice};
 
 use super::{PluginCallGuard, PluginIdentity, PluginInstance, WorkerEvent};
 use crate::resources::ResourceKind;
-use crate::runtime::HostRuntime;
+use crate::runtime::{HostRuntime, LyricsKinds};
 
 const PRIMARY_TIMEOUT: Duration = Duration::from_secs(2);
 /// Secondary transformers run after the original lyrics are shown, and one may process the whole
 /// song on its first line, so it gets far longer than a primary transformer.
 const SECONDARY_TIMEOUT: Duration = Duration::from_secs(180);
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct LyricsBridge {
     workers: Arc<Mutex<Vec<LyricsWorker>>>,
+    kinds: LyricsKinds,
 }
 
 #[derive(Clone)]
@@ -63,6 +64,13 @@ impl LyricsWorker {
 }
 
 impl LyricsBridge {
+    pub(crate) fn new(kinds: LyricsKinds) -> Self {
+        Self {
+            workers: Arc::default(),
+            kinds,
+        }
+    }
+
     pub(crate) fn attach(&self, instance: &PluginInstance) {
         if let Some(thread) = &instance.worker
             && let Some(sender) = &instance.event_tx
@@ -83,12 +91,23 @@ impl LyricsBridge {
         }
     }
 
-    fn active_workers(&self) -> Vec<(LyricsWorker, bool)> {
+    /// Lists the plugins with a transformer of the requested kind. A plugin's calls run one at a
+    /// time on its worker, so sending it a request it has no transformer for would wait behind
+    /// its other work, such as a long secondary call, and then time out.
+    fn active_workers(&self, secondary: bool) -> Vec<(LyricsWorker, bool)> {
+        let Ok(kinds) = self.kinds.lock() else {
+            return Vec::new();
+        };
         self.workers
             .lock()
             .map(|workers| {
                 workers
                     .iter()
+                    .filter(|worker| {
+                        kinds
+                            .values()
+                            .any(|&(token, kind)| token == worker.token && kind == secondary)
+                    })
                     .cloned()
                     .map(|worker| (worker, true))
                     .collect()
@@ -119,7 +138,7 @@ impl LyricsBridge {
         secondary: bool,
         cancelled: &AtomicBool,
     ) -> Arc<Vec<LyricLine>> {
-        let mut workers = self.active_workers();
+        let mut workers = self.active_workers(secondary);
         if workers.is_empty() {
             return lyrics;
         }

@@ -33,8 +33,14 @@ pub struct HostRuntime {
     pub(crate) store_root: PathBuf,
     pub(crate) store_lock: Mutex<()>,
     pub(crate) system_services: Mutex<Option<SystemServices>>,
+    pub(crate) lyrics_kinds: LyricsKinds,
     _pin: PhantomPinned,
 }
+
+/// Each lyric transformer's owner and whether it writes secondary text, kept outside the service
+/// state so the lyrics bridge can skip plugins without a transformer of the requested kind
+/// instead of queueing behind their other work.
+pub(crate) type LyricsKinds = Arc<Mutex<HashMap<u64, (PluginToken, bool)>>>;
 
 #[derive(Clone, Copy)]
 pub struct SystemServices {
@@ -174,6 +180,7 @@ impl HostRuntime {
             store_root,
             store_lock: Mutex::new(()),
             system_services: Mutex::new(None),
+            lyrics_kinds: LyricsKinds::default(),
             _pin: PhantomPinned,
         });
         // SAFETY: The Box allocation is pinned before binding its address into the tables.
@@ -409,6 +416,9 @@ impl HostRuntime {
                 }
                 ResourceKind::Lyrics => {
                     state.lyrics.remove(id);
+                    if let Ok(mut kinds) = self.lyrics_kinds.lock() {
+                        kinds.remove(id);
+                    }
                 }
                 ResourceKind::Settings => {
                     if state.settings.remove(id).is_some() {

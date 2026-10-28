@@ -135,12 +135,14 @@ impl PluginHost {
             .map_err(|error| PluginHostError::Io(format!("{}: {error}", plugin_dir.display())))?;
         let plugin_dir = std::fs::canonicalize(&plugin_dir)
             .map_err(|error| PluginHostError::Io(format!("{}: {error}", plugin_dir.display())))?;
+        let runtime = HostRuntime::new(host_build, plugin_dir.clone());
+        let lyrics_bridge = LyricsBridge::new(runtime.lyrics_kinds.clone());
         Ok(Self {
             entries: RefCell::new(Vec::new()),
             builtins: RefCell::new(HashMap::new()),
-            runtime: HostRuntime::new(host_build, plugin_dir.clone()),
+            runtime,
             plugin_dir,
-            lyrics_bridge: LyricsBridge::default(),
+            lyrics_bridge,
             retained_dll: Cell::new(false),
         })
     }
