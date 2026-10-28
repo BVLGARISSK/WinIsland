@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use pollkit::Job;
@@ -176,6 +177,7 @@ pub struct SmtcListener {
     lyrics_mode_tx: mpsc::UnboundedSender<LyricsMode>,
     lyrics_source_tx: mpsc::UnboundedSender<String>,
     lyrics_local_dir_tx: mpsc::UnboundedSender<Option<String>>,
+    lyrics_refresh_tx: mpsc::UnboundedSender<()>,
     allowed_apps_tx: mpsc::UnboundedSender<Vec<String>>,
     wake_tx: std::sync::mpsc::SyncSender<()>,
     cancel_token: CancellationToken,
@@ -200,6 +202,7 @@ impl SmtcListener {
         let (lyrics_mode_tx, lyrics_mode_rx) = mpsc::unbounded_channel();
         let (lyrics_source_tx, lyrics_source_rx) = mpsc::unbounded_channel();
         let (lyrics_local_dir_tx, lyrics_local_dir_rx) = mpsc::unbounded_channel();
+        let (lyrics_refresh_tx, lyrics_refresh_rx) = mpsc::unbounded_channel();
         let (allowed_apps_tx, allowed_apps_rx) = mpsc::unbounded_channel();
         let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
         let cancel_token = CancellationToken::new();
@@ -222,6 +225,7 @@ impl SmtcListener {
                     lyrics_mode_rx,
                     lyrics_source_rx,
                     lyrics_local_dir_rx,
+                    lyrics_refresh_rx,
                     allowed_apps_rx,
                     wake_rx,
                     known_apps,
@@ -241,6 +245,7 @@ impl SmtcListener {
             lyrics_mode_tx,
             lyrics_source_tx,
             lyrics_local_dir_tx,
+            lyrics_refresh_tx,
             allowed_apps_tx,
             wake_tx,
             cancel_token,
@@ -289,6 +294,11 @@ impl SmtcListener {
 
     pub fn set_lyrics_local_dir(&self, dir: Option<String>) {
         let _ = self.lyrics_local_dir_tx.send(dir);
+    }
+
+    pub fn refresh_lyrics(&self) {
+        let _ = self.lyrics_refresh_tx.send(());
+        self.wake_worker();
     }
 
     pub fn take_info_if_changed(&mut self) -> Option<MediaInfo> {
@@ -366,6 +376,16 @@ impl LyricsFetchRequest {
     }
 }
 
+/// Tells a running lyrics annotation to stop once the fetch that started it is dropped, for
+/// example because the track changed.
+struct CancelOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 pub(super) fn spawn_lyrics_fetch(
     info_tx: &watch::Sender<MediaInfo>,
     request: LyricsFetchRequest,
@@ -377,6 +397,7 @@ pub(super) fn spawn_lyrics_fetch(
         if !request.matches(&media_changes.borrow()) {
             return;
         }
+        let annotate_bridge = lyrics_bridge.clone();
         let fetch = async {
             let lyrics = if request.mode == LyricsMode::Lrc {
                 let local_dir = request
@@ -405,13 +426,47 @@ pub(super) fn spawn_lyrics_fetch(
                 )
                 .await
             };
-            match (lyrics, lyrics_bridge) {
+            let lyrics = match (lyrics, lyrics_bridge) {
                 (Some(lyrics), Some(bridge)) => {
                     tokio::task::spawn_blocking(move || bridge.apply(lyrics))
                         .await
                         .ok()
                 }
                 (lyrics, _) => lyrics,
+            };
+            let lyrics = lyrics?;
+            let Some(bridge) = annotate_bridge else {
+                return Some(lyrics);
+            };
+            let show_secondary = tokio::task::spawn_blocking(|| {
+                crate::core::persistence::load_config().show_secondary_lyrics
+            })
+            .await
+            .unwrap_or(false);
+            if !show_secondary {
+                return Some(lyrics);
+            }
+            // A provider translation may be in another language than a secondary-text plugin
+            // produces, so it stays hidden while plugins run and returns only if none answers.
+            let mut stripped = lyrics.clone();
+            for line in Arc::make_mut(&mut stripped) {
+                line.secondary_text = None;
+            }
+            // Show the lines at once; a plugin may need a while for the whole song.
+            info_tx.send_if_modified(|current| {
+                if !request.matches(current) {
+                    return false;
+                }
+                current.lyrics = Some(stripped.clone());
+                true
+            });
+            let cancel = CancelOnDrop(Arc::new(AtomicBool::new(false)));
+            let cancelled = cancel.0.clone();
+            match tokio::task::spawn_blocking(move || bridge.annotate(stripped, &cancelled)).await {
+                Ok(annotated) if annotated.iter().any(|line| line.secondary_text.is_some()) => {
+                    Some(annotated)
+                }
+                _ => Some(lyrics),
             }
         };
         let lyrics = tokio::select! {

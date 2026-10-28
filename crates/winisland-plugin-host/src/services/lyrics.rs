@@ -1,7 +1,9 @@
 use std::ffi::c_void;
 
 use winisland_plugin_api::abi::{CAP_LYRICS, PluginStatus};
-use winisland_plugin_api::types::v2::lyrics::LyricsTransformerDataV2;
+use winisland_plugin_api::types::v2::lyrics::{
+    LYRICS_TRANSFORMER_FLAG_SECONDARY, LyricsTransformerDataV2,
+};
 use winisland_plugin_api::types::v2::{PluginToken, ResourceId};
 
 use super::{read_struct, runtime};
@@ -27,7 +29,7 @@ pub unsafe extern "C" fn register(
     if let Err(status) = host.registry.require(token, CAP_LYRICS) {
         return status;
     }
-    if data.flags != 0 {
+    if data.flags & !LYRICS_TRANSFORMER_FLAG_SECONDARY != 0 {
         return PluginStatus::InvalidArgument;
     }
     let Some(on_transform) = data.on_transform else {
@@ -46,6 +48,7 @@ pub unsafe extern "C" fn register(
         LyricsRecord {
             on_transform,
             callback_data: data.callback_data as usize,
+            secondary: data.flags & LYRICS_TRANSFORMER_FLAG_SECONDARY != 0,
             in_flight: 0,
         },
     );

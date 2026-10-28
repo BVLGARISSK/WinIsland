@@ -6,6 +6,10 @@ use crate::abi::PluginStatus;
 /// The lyric line contains word-synchronised timing boundaries.
 pub const LYRICS_TEXT_FLAG_WORD_SYNCED: u32 = 1 << 0;
 
+/// The transformer's output is shown as the line's secondary text, such as a translation, instead
+/// of replacing the line. An empty output leaves the line without secondary text.
+pub const LYRICS_TRANSFORMER_FLAG_SECONDARY: u32 = 1 << 0;
+
 /// A parsed lyric line supplied to a registered transformer.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -18,6 +22,13 @@ pub struct LyricsTextV2 {
     pub line_time_ms: u64,
     /// Borrowed UTF-8 text valid only for this callback.
     pub text: Utf8Slice,
+    /// Zero-based position of this line in the song. Present when `struct_size` covers it.
+    pub line_index: u32,
+    /// Number of lines in the song. Present when `struct_size` covers it.
+    pub line_count: u32,
+    /// Every line of the song joined by `\n`, borrowed for this callback, so a transformer can
+    /// process the whole song at once. Present when `struct_size` covers it.
+    pub song: Utf8Slice,
 }
 
 impl Default for LyricsTextV2 {
@@ -27,6 +38,9 @@ impl Default for LyricsTextV2 {
             flags: 0,
             line_time_ms: 0,
             text: Utf8Slice::empty(),
+            line_index: 0,
+            line_count: 0,
+            song: Utf8Slice::empty(),
         }
     }
 }
@@ -55,7 +69,7 @@ pub type LyricsTransformFnV2 = unsafe extern "C" fn(
 pub struct LyricsTransformerDataV2 {
     /// Must be `size_of::<LyricsTransformerDataV2>()`.
     pub struct_size: u32,
-    /// Reserved for future flags. Must be zero.
+    /// Zero or `LYRICS_TRANSFORMER_FLAG_SECONDARY`.
     pub flags: u32,
     pub on_transform: Option<LyricsTransformFnV2>,
     /// Opaque pointer passed back to `on_transform`.

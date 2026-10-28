@@ -27,9 +27,7 @@ pub use lyrics::LyricsBridge;
 enum WorkerEvent {
     LyricsTransform {
         token: PluginToken,
-        time_ms: u64,
-        word_synced: bool,
-        text: String,
+        request: lyrics::TransformRequest,
         response: Sender<Result<String, PluginStatus>>,
     },
     MediaCommand {
@@ -400,18 +398,11 @@ fn dispatch_event(runtime: &HostRuntime, identity: &Arc<PluginIdentity>, event: 
     match event {
         WorkerEvent::LyricsTransform {
             token,
-            time_ms,
-            word_synced,
-            text,
+            request,
             response,
         } => {
             let _ = response.send(lyrics::dispatch_transform(
-                runtime,
-                identity,
-                token,
-                time_ms,
-                word_synced,
-                text,
+                runtime, identity, token, &request,
             ));
         }
         WorkerEvent::MediaCommand {

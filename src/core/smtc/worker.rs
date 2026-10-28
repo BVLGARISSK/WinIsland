@@ -22,6 +22,7 @@ pub(super) struct WorkerChannels {
     pub(super) lyrics_mode_rx: mpsc::UnboundedReceiver<LyricsMode>,
     pub(super) lyrics_source_rx: mpsc::UnboundedReceiver<String>,
     pub(super) lyrics_local_dir_rx: mpsc::UnboundedReceiver<Option<String>>,
+    pub(super) lyrics_refresh_rx: mpsc::UnboundedReceiver<()>,
     pub(super) allowed_apps_rx: mpsc::UnboundedReceiver<Vec<String>>,
     pub(super) wake_rx: std::sync::mpsc::Receiver<()>,
     pub(super) known_apps: Vec<String>,
@@ -38,6 +39,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
         mut lyrics_mode_rx,
         mut lyrics_source_rx,
         mut lyrics_local_dir_rx,
+        mut lyrics_refresh_rx,
         mut allowed_apps_rx,
         wake_rx,
         known_apps,
@@ -140,6 +142,9 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                 current_lyrics_local_dir = dir;
                 lyrics_settings_changed = true;
             }
+        }
+        while lyrics_refresh_rx.try_recv().is_ok() {
+            lyrics_settings_changed = true;
         }
         if lyrics_settings_changed {
             refresh_current_lyrics(

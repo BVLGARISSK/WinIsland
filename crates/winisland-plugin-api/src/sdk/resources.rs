@@ -9,7 +9,9 @@ use crate::abi::{
     SettingsApiV2, StoreApiV2, TextApiV2,
 };
 use crate::types::v2::context::{ContextDataV2, HostStateV2, MediaSourceDataV2};
-use crate::types::v2::lyrics::{LyricsTextV2, LyricsTransformerDataV2};
+use crate::types::v2::lyrics::{
+    LYRICS_TRANSFORMER_FLAG_SECONDARY, LyricsTextV2, LyricsTransformerDataV2,
+};
 use crate::types::v2::settings::{SETTINGS_ITEM_SECTION, SettingsItemV2, SettingsPageDataV2};
 use crate::types::v2::{ByteSlice, ImageId, ResourceId, TextMetricsV2, TextStyleV2, Utf8Slice};
 
@@ -21,13 +23,23 @@ enum ResourceKind {
 }
 
 type Transform = dyn Fn(&str) -> String + Send + Sync;
-type TransformHolder = Box<Box<Transform>>;
+type SecondaryTransform = dyn Fn(&LyricsLine<'_>) -> String + Send + Sync;
+
+/// One lyric line passed to a secondary-text transformer, with the whole song for context.
+pub struct LyricsLine<'a> {
+    pub text: &'a str,
+    pub time_ms: u64,
+    pub index: u32,
+    pub count: u32,
+    /// Every line of the song joined by `\n`.
+    pub song: &'a str,
+}
 
 pub struct Resource {
     host: Host,
     id: ResourceId,
     kind: ResourceKind,
-    callback: Option<TransformHolder>,
+    callback: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl Resource {
@@ -139,6 +151,20 @@ impl HostStateApi {
     }
 }
 
+/// # Safety
+/// A non-null `slice.ptr` must be readable for `slice.len` bytes while the result is used.
+unsafe fn borrowed_text<'a>(slice: Utf8Slice) -> Option<&'a str> {
+    if slice.len == 0 {
+        return Some("");
+    }
+    if slice.ptr.is_null() {
+        return None;
+    }
+    // SAFETY: The caller guarantees the non-null pointer is valid for the declared length.
+    let bytes = unsafe { std::slice::from_raw_parts(slice.ptr, slice.len as usize) };
+    std::str::from_utf8(bytes).ok()
+}
+
 unsafe extern "C" fn transform_line(
     callback_data: *mut c_void,
     _resource_id: ResourceId,
@@ -152,21 +178,8 @@ unsafe extern "C" fn transform_line(
     }
     // SAFETY: The host owns this callback invocation and keeps the input alive for its duration.
     let input = unsafe { &*input };
-    if input.text.ptr.is_null() && input.text.len != 0 {
-        return PluginStatus::InvalidArgument;
-    }
-    // SAFETY: A non-null slice pointer is valid for the declared length by ABI contract.
-    let bytes = unsafe {
-        std::slice::from_raw_parts(
-            if input.text.len == 0 {
-                std::ptr::NonNull::dangling().as_ptr()
-            } else {
-                input.text.ptr
-            },
-            input.text.len as usize,
-        )
-    };
-    let Ok(text) = std::str::from_utf8(bytes) else {
+    // SAFETY: The host keeps the borrowed text valid for this callback.
+    let Some(text) = (unsafe { borrowed_text(input.text) }) else {
         return PluginStatus::InvalidArgument;
     };
     // SAFETY: The callback pointer is the stable inner Box retained by Resource.
@@ -175,6 +188,59 @@ unsafe extern "C" fn transform_line(
     else {
         return PluginStatus::Internal;
     };
+    // SAFETY: The host provides a valid out_len pointer and `capacity` writable output bytes.
+    unsafe { write_output(&value, output, capacity, out_len) }
+}
+
+unsafe extern "C" fn transform_secondary(
+    callback_data: *mut c_void,
+    _resource_id: ResourceId,
+    input: *const LyricsTextV2,
+    output: *mut u8,
+    capacity: u32,
+    out_len: *mut u32,
+) -> PluginStatus {
+    if callback_data.is_null() || input.is_null() || out_len.is_null() {
+        return PluginStatus::InvalidArgument;
+    }
+    // SAFETY: The host keeps the input prefix alive for this callback.
+    let size = unsafe { (*input).struct_size };
+    if size < std::mem::size_of::<LyricsTextV2>() as u32 {
+        return PluginStatus::UnsupportedVersion;
+    }
+    // SAFETY: The checked size covers every field read below.
+    let input = unsafe { &*input };
+    // SAFETY: The host keeps both borrowed strings valid for this callback.
+    let (Some(text), Some(song)) =
+        (unsafe { (borrowed_text(input.text), borrowed_text(input.song)) })
+    else {
+        return PluginStatus::InvalidArgument;
+    };
+    let line = LyricsLine {
+        text,
+        time_ms: input.line_time_ms,
+        index: input.line_index,
+        count: input.line_count,
+        song,
+    };
+    // SAFETY: The callback pointer is the stable inner Box retained by Resource.
+    let callback = unsafe { &*(callback_data as *const Box<SecondaryTransform>) };
+    let Ok(value) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(&line)))
+    else {
+        return PluginStatus::Internal;
+    };
+    // SAFETY: The host provides a valid out_len pointer and `capacity` writable output bytes.
+    unsafe { write_output(&value, output, capacity, out_len) }
+}
+
+/// # Safety
+/// `out_len` must be writable, and a non-null `output` must have `capacity` writable bytes.
+unsafe fn write_output(
+    value: &str,
+    output: *mut u8,
+    capacity: u32,
+    out_len: *mut u32,
+) -> PluginStatus {
     let Ok(required) = u32::try_from(value.len()) else {
         return PluginStatus::LimitExceeded;
     };
@@ -201,21 +267,47 @@ impl LyricsApi {
     where
         F: Fn(&str) -> String + Send + Sync + 'static,
     {
+        let mut callback: Box<Box<Transform>> = Box::new(Box::new(transform));
+        let data = LyricsTransformerDataV2 {
+            on_transform: Some(transform_line),
+            callback_data: (&mut *callback as *mut Box<Transform>).cast(),
+            ..Default::default()
+        };
+        self.register_data(&data, callback)
+    }
+
+    /// Registers a transformer whose output is shown below each line, such as a translation.
+    ///
+    /// The host calls it after the original lyrics are displayed, one line at a time in song
+    /// order; return an empty string to leave a line without secondary text.
+    pub fn register_secondary<F>(&self, transform: F) -> Result<Resource, Error>
+    where
+        F: Fn(&LyricsLine<'_>) -> String + Send + Sync + 'static,
+    {
+        let mut callback: Box<Box<SecondaryTransform>> = Box::new(Box::new(transform));
+        let data = LyricsTransformerDataV2 {
+            flags: LYRICS_TRANSFORMER_FLAG_SECONDARY,
+            on_transform: Some(transform_secondary),
+            callback_data: (&mut *callback as *mut Box<SecondaryTransform>).cast(),
+            ..Default::default()
+        };
+        self.register_data(&data, callback)
+    }
+
+    fn register_data(
+        &self,
+        data: &LyricsTransformerDataV2,
+        callback: Box<dyn std::any::Any + Send + Sync>,
+    ) -> Result<Resource, Error> {
         let table = self
             ._host
             .query::<LyricsTransformApiV2>(abi::IFACE_LYRICS_TRANSFORM)?;
         let register = table
             .register
             .ok_or(Error::MissingFunction("lyrics.register"))?;
-        let mut callback: TransformHolder = Box::new(Box::new(transform));
-        let data = LyricsTransformerDataV2 {
-            on_transform: Some(transform_line),
-            callback_data: (&mut *callback as *mut Box<Transform>).cast(),
-            ..Default::default()
-        };
         let mut id = ResourceId::INVALID;
         // SAFETY: The callback pointer remains stable in Resource until release completes.
-        success(unsafe { register(table.prefix.context, self._host.token, &data, &mut id) })?;
+        success(unsafe { register(table.prefix.context, self._host.token, data, &mut id) })?;
         Ok(Resource {
             host: self._host.clone(),
             id,

@@ -2,6 +2,18 @@
 
 This changelog lists `winisland-plugin-api` versions. The website displays this file as its plugin API update log.
 
+## Unreleased
+
+Added:
+
+- `LYRICS_TRANSFORMER_FLAG_SECONDARY` for lyric transformers whose output is shown below each line, such as a translation, instead of replacing it; the host runs them after the original lines are displayed
+- `LyricsTextV2::{line_index, line_count, song}` so a transformer can process the whole song at once
+- Rust SDK `LyricsApi::register_secondary` and `LyricsLine`
+
+Changed:
+
+- `LyricsTextV2` grows from 32 to 56 bytes; the existing fields keep their offsets, and callbacks built against the previous layout read only the prefix they know
+
 ## 0.11.0 - Oct 3, 2026
 
 Added:

@@ -112,6 +112,8 @@ pub(crate) struct TranslationBundle {
 pub struct LyricsRecord {
     pub on_transform: LyricsTransformFnV2,
     pub callback_data: usize,
+    /// Writes the line's secondary text instead of replacing the line.
+    pub secondary: bool,
     pub in_flight: u32,
 }
 

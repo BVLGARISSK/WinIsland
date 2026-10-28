@@ -24,9 +24,16 @@ Both methods take `context, token` first and return `PluginStatus`.
 
 ## Transformation callback
 
-`LyricsTransformerDataV2` requires `on_transform`; its reserved `flags` must be zero. The callback receives a `LyricsTextV2` containing the line timestamp, flags, and borrowed UTF-8 text. It is called twice for each line: first with null output and zero capacity to ask for the required byte length, then with a writable buffer. Write `out_len` in both passes and return `PluginStatus::Ok` on success. Keep the output stable between passes.
+`LyricsTransformerDataV2` requires `on_transform`; `flags` is zero or `LYRICS_TRANSFORMER_FLAG_SECONDARY`. The callback receives a `LyricsTextV2` containing the line timestamp, flags, and borrowed UTF-8 text. It is called twice for each line: first with null output and zero capacity to ask for the required byte length, then with a writable buffer. Write `out_len` in both passes and return `PluginStatus::Ok` on success. Keep the output stable between passes.
 
 When `LYRICS_TEXT_FLAG_WORD_SYNCED` is set, preserve the same Unicode character count to keep word timing boundaries. The input text is valid only during the callback. Keep `callback_data` valid until release succeeds; releasing during an active callback returns `LimitExceeded`. The current quota is four transformers per plugin.
+
+## Secondary text
+
+Register with `LYRICS_TRANSFORMER_FLAG_SECONDARY`, or call `host.lyrics()?.register_secondary(|line| ...)`, to supply text shown below each line, such as a translation, instead of replacing the line. The host calls secondary transformers after the original lines are displayed, one line at a time in song order, and waits up to 180 seconds for each call, so a transformer can process the whole song on its first line and answer later lines from a cache. Return an empty string to leave a line without secondary text; word timing is unaffected. The host stops asking once the track changes or the user turns off secondary lyrics.
+
+`LyricsTextV2` also carries `line_index`, `line_count`, and `song`, every line joined by `
+`, for both kinds of transformer. Check `struct_size` before reading these fields on an older host. When a secondary transformer supplies any text for a song, provider translations are not shown for that song.
 
 See the [lyrics example](https://github.com/WinIslandProject/WinIsland/blob/master/crates/winisland-plugin-api/examples/lyrics_transform.rs) and [callback type](https://github.com/WinIslandProject/WinIsland/blob/master/crates/winisland-plugin-api/src/types/v2/lyrics.rs).
 

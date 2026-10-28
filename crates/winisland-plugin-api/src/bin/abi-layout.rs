@@ -154,7 +154,16 @@ fn main() {
         callback_data
     );
     show!(TranslationPairV2, key, value);
-    show!(LyricsTextV2, struct_size, flags, line_time_ms, text);
+    show!(
+        LyricsTextV2,
+        struct_size,
+        flags,
+        line_time_ms,
+        text,
+        line_index,
+        line_count,
+        song
+    );
     show!(
         LyricsTransformerDataV2,
         struct_size,

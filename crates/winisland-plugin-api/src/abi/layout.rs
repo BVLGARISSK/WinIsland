@@ -460,12 +460,15 @@ assert_layout!(
 assert_layout!(TranslationPairV2, 32, 8, key = 0, value = 16);
 assert_layout!(
     LyricsTextV2,
-    32,
+    56,
     8,
     struct_size = 0,
     flags = 4,
     line_time_ms = 8,
-    text = 16
+    text = 16,
+    line_index = 32,
+    line_count = 36,
+    song = 40
 );
 assert_layout!(
     LyricsTransformerDataV2,
