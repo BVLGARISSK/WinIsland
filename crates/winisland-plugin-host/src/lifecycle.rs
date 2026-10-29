@@ -24,6 +24,10 @@ use crate::runtime::HostRuntime;
 mod lyrics;
 pub use lyrics::LyricsBridge;
 
+/// How long shutdown waits for the plugin worker's current call, matching the limit the host
+/// gives other plugin calls.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+
 enum WorkerEvent {
     LyricsTransform {
         token: PluginToken,
@@ -184,6 +188,11 @@ impl PluginInstance {
                     let mut next_tick = previous;
                     while !stop.load(Ordering::Acquire) {
                         for _ in 0..256 {
+                            // Events queued behind a long lyrics call are dropped once shutdown
+                            // starts instead of delaying it.
+                            if stop.load(Ordering::Acquire) {
+                                break;
+                            }
                             let Ok(event) = event_rx.try_recv() else {
                                 break;
                             };
@@ -370,6 +379,18 @@ impl PluginInstance {
         self.event_tx.take();
         if let Some(worker) = &self.worker {
             worker.thread().unpark();
+            // A secondary lyrics call may run for minutes and cannot be interrupted. Shutdown
+            // usually runs on the UI thread, so it fails instead of freezing the window; the
+            // plugin stays loaded and a later shutdown succeeds once the call has returned.
+            let deadline = Instant::now() + SHUTDOWN_WAIT;
+            while !worker.is_finished() {
+                if Instant::now() >= deadline {
+                    return Err(PluginHostError::Worker(
+                        "plugin is still running a call; try again once it returns".into(),
+                    ));
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
         }
         if let Some(worker) = self.worker.take() {
             worker.join().map_err(|_| {

@@ -632,8 +632,6 @@ impl App {
                         self.config.language.clone(),
                     );
                     let old_smtc_enabled = self.config.smtc_enabled;
-                    let secondary_lyrics_changed =
-                        self.config.show_secondary_lyrics != current_config.show_secondary_lyrics;
                     let old_system_controls_overlay = self.config.system_controls_overlay;
                     let old_position_x_offset = self.config.position_x_offset;
                     let old_position_y_offset = self.config.position_y_offset;
@@ -668,9 +666,8 @@ impl App {
                         .set_lyrics_source(self.config.lyrics_source.clone());
                     self.smtc
                         .set_lyrics_local_dir(self.config.lyrics_local_dir.clone());
-                    if secondary_lyrics_changed {
-                        self.smtc.refresh_lyrics();
-                    }
+                    self.smtc
+                        .set_show_secondary_lyrics(self.config.show_secondary_lyrics);
                     self.smtc.set_allowed_apps(self.config.smtc_apps.clone());
                     if old_system_controls_overlay != self.config.system_controls_overlay {
                         self.compact_overlay.set_system_controls_overlay_enabled(

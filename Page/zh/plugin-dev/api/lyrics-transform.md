@@ -30,10 +30,11 @@ let transform = host.lyrics()?.register(|line| line.replace("colour", "Colour"))
 
 ## 附加文字
 
-注册时设置 `LYRICS_TRANSFORMER_FLAG_SECONDARY`，或调用 `host.lyrics()?.register_secondary(|line| ...)`，回调的输出会显示在每行下方（例如译文），而不是替换该行。宿主在原文显示后才调用附加文字转换器，按歌曲顺序逐行调用，每次最多等待 180 秒，因此转换器可以在第一行处理整首歌，之后各行直接从缓存返回。返回空字符串表示该行没有附加文字；逐词时间不受影响。切歌或用户关闭附加歌词后，宿主不再继续调用。
+注册时设置 `LYRICS_TRANSFORMER_FLAG_SECONDARY`，或调用 `host.lyrics()?.register_secondary(|line| ...)`，回调的输出会显示在每行下方（例如译文），而不是替换该行。宿主仅在开启“显示附加歌词”时调用附加文字转换器，在原文显示后按歌曲顺序逐行调用。每次最多等待 180 秒，因此转换器可以在第一行处理整首歌，之后各行直接从缓存返回；宿主约每秒显示一次已完成的行。返回空字符串表示该行没有附加文字；逐词时间不受影响。切歌后宿主不再继续调用，该歌曲已排队的请求会直接跳过，不会调用插件。
 
-`LyricsTextV2` 另外提供 `line_index`、`line_count` 和 `song`（所有行以 `
-` 连接），两种转换器都会收到。在旧版宿主上读取这些字段前，请先检查 `struct_size`。某首歌只要有附加文字转换器提供了文字，该歌曲就不显示歌词来源附带的翻译。
+同一插件的所有回调都在它的工作线程上逐个执行，因此附加文字调用进行时，该插件的组件 tick、设置变更和媒体事件都要等它完成。工作线程忙碌时，宿主会跳过该插件的主转换器，设置变更仍会在 2 秒后超时。单次调用超过 180 秒后，宿主会跳过该插件，直到该调用返回。停用、更新或卸载插件时，宿主最多等待正在执行的调用 2 秒，超时则操作失败、插件保持加载，所以每次调用应尽量简短。
+
+`LyricsTextV2` 另外提供 `line_index`、`line_count` 和 `song`（所有行以换行符 `\n` 连接），两种转换器都会收到。在旧版宿主上读取这些字段前，请先检查 `struct_size`。某首歌只要有附加文字转换器提供了文字，该歌曲就不显示歌词来源附带的翻译；未注册附加文字转换器时，歌词来源的翻译照常显示。
 
 参见[歌词示例](https://github.com/WinIslandProject/WinIsland/blob/master/crates/winisland-plugin-api/examples/lyrics_transform.rs)和[回调类型](https://github.com/WinIslandProject/WinIsland/blob/master/crates/winisland-plugin-api/src/types/v2/lyrics.rs)。
 

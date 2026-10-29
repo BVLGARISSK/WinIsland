@@ -404,6 +404,7 @@ pub(super) fn fetch_properties(
                 mode: lyrics.mode,
                 source: lyrics.source.to_string(),
                 local_dir: lyrics.local_dir.map(str::to_string),
+                show_secondary: lyrics.show_secondary,
                 request_id,
                 track_id,
             },

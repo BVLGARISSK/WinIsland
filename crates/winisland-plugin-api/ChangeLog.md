@@ -13,6 +13,7 @@ Added:
 Changed:
 
 - `LyricsTextV2` grows from 32 to 56 bytes; the existing fields keep their offsets, and callbacks built against the previous layout read only the prefix they know
+- `LyricsTextV2` has new public fields, so Rust code that builds it with a struct literal must set them or use `..Default::default()`; this requires a minor version bump of the crate
 
 ## 0.11.0 - Oct 3, 2026
 

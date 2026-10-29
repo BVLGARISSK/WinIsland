@@ -1,8 +1,8 @@
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use winisland_core::lyrics::LyricLine;
 use winisland_plugin_api::abi::PluginStatus;
@@ -17,6 +17,10 @@ const PRIMARY_TIMEOUT: Duration = Duration::from_secs(2);
 /// Secondary transformers run after the original lyrics are shown, and one may process the whole
 /// song on its first line, so it gets far longer than a primary transformer.
 const SECONDARY_TIMEOUT: Duration = Duration::from_secs(180);
+/// How often a waiting request checks whether its annotation was cancelled.
+const CANCEL_POLL: Duration = Duration::from_millis(100);
+/// How often partly annotated lyrics are shown while secondary transformers run.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub struct LyricsBridge {
@@ -30,6 +34,12 @@ struct LyricsWorker {
     token: PluginToken,
     sender: Sender<WorkerEvent>,
     thread: std::thread::Thread,
+    /// Requests the plugin worker has not handled yet, including ones the bridge stopped waiting
+    /// for.
+    pending: Arc<AtomicUsize>,
+    /// Set when a call outlived its timeout, so later songs skip the plugin instead of waiting
+    /// for it again; cleared once the plugin has no pending request.
+    stalled: Arc<AtomicBool>,
 }
 
 pub(super) struct TransformRequest {
@@ -40,14 +50,41 @@ pub(super) struct TransformRequest {
     pub(super) index: u32,
     pub(super) count: u32,
     pub(super) song: Arc<str>,
+    /// Set once the lyrics this request belongs to are stale, so a queued request is skipped
+    /// instead of calling the plugin.
+    pub(super) cancelled: Arc<AtomicBool>,
+    _pending: PendingRequest,
+}
+
+/// Counts a request as pending until the plugin worker has handled or dropped it.
+struct PendingRequest {
+    pending: Arc<AtomicUsize>,
+    stalled: Arc<AtomicBool>,
+}
+
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        if self.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.stalled.store(false, Ordering::Release);
+        }
+    }
 }
 
 impl LyricsWorker {
+    fn pending_request(&self) -> PendingRequest {
+        self.pending.fetch_add(1, Ordering::AcqRel);
+        PendingRequest {
+            pending: self.pending.clone(),
+            stalled: self.stalled.clone(),
+        }
+    }
+
     fn transform(
         &self,
         request: TransformRequest,
         timeout: Duration,
     ) -> Result<String, PluginStatus> {
+        let cancelled = request.cancelled.clone();
         let (response, receive) = mpsc::channel();
         self.sender
             .send(WorkerEvent::LyricsTransform {
@@ -57,9 +94,28 @@ impl LyricsWorker {
             })
             .map_err(|_| PluginStatus::Internal)?;
         self.thread.unpark();
-        receive
-            .recv_timeout(timeout)
-            .map_err(|_| PluginStatus::Internal)?
+        let deadline = Instant::now() + timeout;
+        loop {
+            // Waiting in slices lets a cancelled annotation give up its thread without waiting for
+            // the plugin to return.
+            let slice = CANCEL_POLL.min(deadline.saturating_duration_since(Instant::now()));
+            match receive.recv_timeout(slice) {
+                Ok(result) => return result,
+                Err(RecvTimeoutError::Disconnected) => return Err(PluginStatus::Internal),
+                Err(RecvTimeoutError::Timeout) if cancelled.load(Ordering::Relaxed) => {
+                    return Err(PluginStatus::StaleHandle);
+                }
+                Err(RecvTimeoutError::Timeout) if Instant::now() >= deadline => {
+                    self.stalled.store(true, Ordering::Release);
+                    // The call may have returned between the timeout and the store above.
+                    if self.pending.load(Ordering::Acquire) == 0 {
+                        self.stalled.store(false, Ordering::Release);
+                    }
+                    return Err(PluginStatus::Internal);
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
     }
 }
 
@@ -81,6 +137,8 @@ impl LyricsBridge {
                 token: instance.token(),
                 sender: sender.clone(),
                 thread: thread.thread().clone(),
+                pending: Arc::default(),
+                stalled: Arc::default(),
             });
         }
     }
@@ -94,6 +152,10 @@ impl LyricsBridge {
     /// Lists the plugins with a transformer of the requested kind. A plugin's calls run one at a
     /// time on its worker, so sending it a request it has no transformer for would wait behind
     /// its other work, such as a long secondary call, and then time out.
+    ///
+    /// A stalled plugin is left out. A busy plugin is left out of primary runs, which must not
+    /// hold back the lyrics; a secondary run queues behind it, because the earlier call is
+    /// usually the previous song's, whose remaining requests the plugin skips.
     fn active_workers(&self, secondary: bool) -> Vec<(LyricsWorker, bool)> {
         let Ok(kinds) = self.kinds.lock() else {
             return Vec::new();
@@ -107,6 +169,8 @@ impl LyricsBridge {
                         kinds
                             .values()
                             .any(|&(token, kind)| token == worker.token && kind == secondary)
+                            && !worker.stalled.load(Ordering::Acquire)
+                            && (secondary || worker.pending.load(Ordering::Acquire) == 0)
                     })
                     .cloned()
                     .map(|worker| (worker, true))
@@ -115,28 +179,37 @@ impl LyricsBridge {
             .unwrap_or_default()
     }
 
+    /// Whether a plugin that can answer now has a transformer that writes secondary text.
+    pub fn has_secondary(&self) -> bool {
+        !self.active_workers(true).is_empty()
+    }
+
     /// Runs the transformers that replace line text.
     pub fn apply(&self, lyrics: Arc<Vec<LyricLine>>) -> Arc<Vec<LyricLine>> {
-        self.run(lyrics, false, &AtomicBool::new(false))
+        self.run(lyrics, false, &Arc::default(), |_| {})
     }
 
     /// Runs the transformers that write each line's secondary text, such as a translation.
     ///
-    /// Stops early once `cancelled` is set; the partly annotated lyrics are then stale and should
-    /// be discarded by the caller.
+    /// `progress` receives the partly annotated lyrics at most once per [`PROGRESS_INTERVAL`] so
+    /// that a plugin answering line by line shows its text as it goes. Stops early once
+    /// `cancelled` is set; the partly annotated lyrics are then stale and should be discarded by
+    /// the caller.
     pub fn annotate(
         &self,
         lyrics: Arc<Vec<LyricLine>>,
-        cancelled: &AtomicBool,
+        cancelled: &Arc<AtomicBool>,
+        progress: impl FnMut(&Arc<Vec<LyricLine>>),
     ) -> Arc<Vec<LyricLine>> {
-        self.run(lyrics, true, cancelled)
+        self.run(lyrics, true, cancelled, progress)
     }
 
     fn run(
         &self,
         mut lyrics: Arc<Vec<LyricLine>>,
         secondary: bool,
-        cancelled: &AtomicBool,
+        cancelled: &Arc<AtomicBool>,
+        mut progress: impl FnMut(&Arc<Vec<LyricLine>>),
     ) -> Arc<Vec<LyricLine>> {
         let mut workers = self.active_workers(secondary);
         if workers.is_empty() {
@@ -157,10 +230,13 @@ impl LyricsBridge {
             PRIMARY_TIMEOUT
         };
         let mut reported = HashSet::new();
-        for (index, line) in (0..count).zip(Arc::make_mut(&mut lyrics).iter_mut()) {
+        let mut published = Instant::now();
+        let mut unpublished = false;
+        for (index, position) in (0..count).zip(0..lyrics.len()) {
             if cancelled.load(Ordering::Relaxed) {
                 break;
             }
+            let line = &mut Arc::make_mut(&mut lyrics)[position];
             for (worker, active) in &mut workers {
                 if !*active {
                     continue;
@@ -173,11 +249,14 @@ impl LyricsBridge {
                     index,
                     count,
                     song: song.clone(),
+                    cancelled: cancelled.clone(),
+                    _pending: worker.pending_request(),
                 };
                 match worker.transform(request, timeout) {
                     Ok(text) if secondary => {
                         if !text.trim().is_empty() && text != line.text {
                             line.secondary_text = Some(text);
+                            unpublished = true;
                             break;
                         }
                     }
@@ -191,13 +270,27 @@ impl LyricsBridge {
                             );
                         }
                     }
+                    Err(PluginStatus::StaleHandle) if cancelled.load(Ordering::Relaxed) => break,
                     Err(status) => {
                         *active = false;
                         if reported.insert(worker.id.clone()) {
-                            log::warn!("Lyrics transformer '{}' failed: {status:?}", worker.id);
+                            if worker.stalled.load(Ordering::Acquire) {
+                                log::warn!(
+                                    "Lyrics transformer '{}' did not answer within {timeout:?}; \
+                                     skipping it until that call returns",
+                                    worker.id
+                                );
+                            } else {
+                                log::warn!("Lyrics transformer '{}' failed: {status:?}", worker.id);
+                            }
                         }
                     }
                 }
+            }
+            if unpublished && published.elapsed() >= PROGRESS_INTERVAL {
+                progress(&lyrics);
+                published = Instant::now();
+                unpublished = false;
             }
         }
         lyrics
@@ -210,6 +303,9 @@ pub(super) fn dispatch_transform(
     token: PluginToken,
     request: &TransformRequest,
 ) -> Result<String, PluginStatus> {
+    if request.cancelled.load(Ordering::Relaxed) {
+        return Err(PluginStatus::StaleHandle);
+    }
     let mut ids = runtime.resources.list(token, ResourceKind::Lyrics)?;
     ids.sort_unstable();
     let mut text = request.text.clone();

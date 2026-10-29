@@ -22,7 +22,7 @@ pub(super) struct WorkerChannels {
     pub(super) lyrics_mode_rx: mpsc::UnboundedReceiver<LyricsMode>,
     pub(super) lyrics_source_rx: mpsc::UnboundedReceiver<String>,
     pub(super) lyrics_local_dir_rx: mpsc::UnboundedReceiver<Option<String>>,
-    pub(super) lyrics_refresh_rx: mpsc::UnboundedReceiver<()>,
+    pub(super) show_secondary_lyrics_rx: mpsc::UnboundedReceiver<bool>,
     pub(super) allowed_apps_rx: mpsc::UnboundedReceiver<Vec<String>>,
     pub(super) wake_rx: std::sync::mpsc::Receiver<()>,
     pub(super) known_apps: Vec<String>,
@@ -39,7 +39,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
         mut lyrics_mode_rx,
         mut lyrics_source_rx,
         mut lyrics_local_dir_rx,
-        mut lyrics_refresh_rx,
+        mut show_secondary_lyrics_rx,
         mut allowed_apps_rx,
         wake_rx,
         known_apps,
@@ -60,6 +60,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
     let mut current_lyrics_mode = LyricsMode::Online;
     let mut current_lyrics_source = "163".to_string();
     let mut current_lyrics_local_dir: Option<String> = None;
+    let mut current_show_secondary_lyrics = false;
     let mut current_allowed_apps: Vec<String> = Vec::new();
 
     while let Ok(mode) = lyrics_mode_rx.try_recv() {
@@ -70,6 +71,9 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
     }
     while let Ok(dir) = lyrics_local_dir_rx.try_recv() {
         current_lyrics_local_dir = dir;
+    }
+    while let Ok(show) = show_secondary_lyrics_rx.try_recv() {
+        current_show_secondary_lyrics = show;
     }
     while let Ok(apps) = allowed_apps_rx.try_recv() {
         current_allowed_apps = apps;
@@ -97,6 +101,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                     mode: current_lyrics_mode,
                     source: &current_lyrics_source,
                     local_dir: current_lyrics_local_dir.as_deref(),
+                    show_secondary: current_show_secondary_lyrics,
                     bridge: lyrics_bridge.as_ref(),
                 },
                 true,
@@ -143,8 +148,18 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                 lyrics_settings_changed = true;
             }
         }
-        while lyrics_refresh_rx.try_recv().is_ok() {
-            lyrics_settings_changed = true;
+        while let Ok(show) = show_secondary_lyrics_rx.try_recv() {
+            if show != current_show_secondary_lyrics {
+                current_show_secondary_lyrics = show;
+                // Without a secondary-text plugin the setting only affects rendering, so the
+                // current lyrics stay.
+                if lyrics_bridge
+                    .as_ref()
+                    .is_some_and(|bridge| bridge.has_secondary())
+                {
+                    lyrics_settings_changed = true;
+                }
+            }
         }
         if lyrics_settings_changed {
             refresh_current_lyrics(
@@ -152,6 +167,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                 current_lyrics_mode,
                 &current_lyrics_source,
                 current_lyrics_local_dir.as_deref(),
+                current_show_secondary_lyrics,
                 lyrics_bridge.as_ref(),
             );
         }
@@ -240,6 +256,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                     mode: current_lyrics_mode,
                     source: &current_lyrics_source,
                     local_dir: current_lyrics_local_dir.as_deref(),
+                    show_secondary: current_show_secondary_lyrics,
                     bridge: lyrics_bridge.as_ref(),
                 },
                 true,
@@ -257,6 +274,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                     mode: current_lyrics_mode,
                     source: &current_lyrics_source,
                     local_dir: current_lyrics_local_dir.as_deref(),
+                    show_secondary: current_show_secondary_lyrics,
                     bridge: lyrics_bridge.as_ref(),
                 },
                 do_auto_allow,
@@ -382,6 +400,7 @@ fn refresh_current_lyrics(
     lyrics_mode: LyricsMode,
     lyrics_source: &str,
     local_dir: Option<&str>,
+    show_secondary: bool,
     lyrics_bridge: Option<&winisland_plugin_host::lifecycle::LyricsBridge>,
 ) {
     let mut request = None;
@@ -412,6 +431,7 @@ fn refresh_current_lyrics(
             mode: lyrics_mode,
             source: lyrics_source.to_string(),
             local_dir: local_dir.map(str::to_string),
+            show_secondary,
             request_id,
             track_id,
         },

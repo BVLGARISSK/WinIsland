@@ -255,12 +255,8 @@ impl Default for App {
             springs: IslandSprings::new(&config),
             geom: WindowGeometry::default(),
             smtc: SmtcListener::new(
+                &config,
                 config.smtc_enabled && crate::platform::capabilities().media_session,
-                config.lyrics_mode.clone(),
-                config.lyrics_source.clone(),
-                config.lyrics_local_dir.clone(),
-                config.smtc_apps.clone(),
-                config.smtc_known_apps.clone(),
                 plugin_host.as_ref().map(|host| host.lyrics_bridge()),
             ),
             audio: AudioProcessor::new(),
