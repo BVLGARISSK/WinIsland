@@ -156,7 +156,7 @@ fn fetch_lyrics_local(title: &str, artist: &str, local_dir: &str) -> Option<Arc<
         return None;
     }
 
-    let mut candidates = collect_lrc_candidates(local_dir, &title_key, &artist_key);
+    let mut candidates = collect_lrc_candidates(local_dir, &title_key, artist, &artist_key);
     candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     for (_, path) in candidates {
         if let Some(content) = read_lrc_text(&path) {
@@ -203,6 +203,7 @@ impl MatchKey {
 fn collect_lrc_candidates(
     local_dir: &Path,
     title: &MatchKey,
+    artist_name: &str,
     artist: &MatchKey,
 ) -> Vec<(u16, PathBuf)> {
     let Ok(entries) = fs::read_dir(local_dir) else {
@@ -222,10 +223,19 @@ fn collect_lrc_candidates(
                 return None;
             }
             let stem = path.file_stem()?.to_str()?;
-            let filename_score = score_lrc_match(&MatchKey::new(stem), title, artist);
-            let metadata_score = read_lrc_text_prefix(&path)
+            let stem_key = MatchKey::new(stem);
+            let filename_score = score_lrc_match(&stem_key, title, artist);
+            let (metadata_score, metadata_artist_match) = read_lrc_text_prefix(&path)
                 .map(|content| score_lrc_metadata(&content, title, artist))
-                .unwrap_or(Some(0))?;
+                .unwrap_or(Some((0, false)))?;
+            // A title alone cannot tell apart different songs that share it, so a filename that
+            // carries more than the title must name the player's artist.
+            if !artist.compact.is_empty()
+                && !metadata_artist_match
+                && !stem_fits_artist(&stem_key, title, artist_name, artist)
+            {
+                return None;
+            }
             let score = filename_score.max(metadata_score);
             (score >= 80).then_some((score, path))
         })
@@ -236,15 +246,7 @@ fn score_lrc_match(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) ->
     if candidate.matches(title) {
         return 110;
     }
-    if candidate.variants().any(|candidate| {
-        title.variants().any(|title| {
-            artist.variants().any(|artist| {
-                !artist.is_empty()
-                    && (candidate == format!("{artist}{title}")
-                        || candidate == format!("{title}{artist}"))
-            })
-        })
-    }) {
+    if joins_title_and_artist(candidate, title, artist) {
         return 120;
     }
     if let Some(score) = fuzzy_title_score(candidate, title, artist) {
@@ -265,6 +267,57 @@ fn score_lrc_match(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) ->
             .any(|candidate| candidate.contains(artist))
     });
     if contains_artist { 100 } else { 80 }
+}
+
+fn joins_title_and_artist(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) -> bool {
+    candidate.variants().any(|candidate| {
+        title.variants().any(|title| {
+            artist.variants().any(|artist| {
+                candidate == format!("{artist}{title}") || candidate == format!("{title}{artist}")
+            })
+        })
+    })
+}
+
+/// Whether a filename names the player's artist, or carries nothing besides the title and a track
+/// number that could name someone else.
+///
+/// Artists are compared as whole words so that a short name such as `Lu` does not match inside
+/// `Blue`.
+fn stem_fits_artist(
+    stem: &MatchKey,
+    title: &MatchKey,
+    artist_name: &str,
+    artist: &MatchKey,
+) -> bool {
+    if stem.matches(title) || joins_title_and_artist(stem, title, artist) {
+        return true;
+    }
+    let words: Vec<&str> = stem.normalized.split_whitespace().collect();
+    let title_words: Vec<&str> = title.normalized.split_whitespace().collect();
+    if let Some(start) = find_words(&words, &title_words)
+        && words[..start]
+            .iter()
+            .chain(&words[start + title_words.len()..])
+            .all(|word| word.chars().all(|character| character.is_ascii_digit()))
+    {
+        return true;
+    }
+    std::iter::once(artist.clone())
+        .chain(split_artists(artist_name))
+        .any(|component| {
+            let component_words: Vec<&str> = component.normalized.split_whitespace().collect();
+            find_words(&words, &component_words).is_some()
+        })
+}
+
+fn find_words(words: &[&str], needle: &[&str]) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    words
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn fuzzy_title_score(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) -> Option<u16> {
@@ -351,7 +404,8 @@ fn shared_token_signal(left: &str, right: &str) -> (usize, usize) {
     (shared_tokens, shared_chars)
 }
 
-fn score_lrc_metadata(content: &str, title: &MatchKey, artist: &MatchKey) -> Option<u16> {
+/// Scores the `[ti:]` and `[ar:]` tags, and reports whether `[ar:]` names the player's artist.
+fn score_lrc_metadata(content: &str, title: &MatchKey, artist: &MatchKey) -> Option<(u16, bool)> {
     let mut metadata_title = None;
     let mut metadata_artist = None;
     for line in content.lines().take(80) {
@@ -372,19 +426,28 @@ fn score_lrc_metadata(content: &str, title: &MatchKey, artist: &MatchKey) -> Opt
     {
         return None;
     }
+    let artist_match = metadata_artist
+        .as_ref()
+        .is_some_and(|metadata| metadata.matches(artist));
     if metadata_title.is_none() {
-        return Some(0);
+        return Some((0, artist_match));
     }
-    Some(
-        if metadata_artist
-            .as_ref()
-            .is_some_and(|metadata| metadata.matches(artist))
-        {
-            140
-        } else {
-            115
-        },
-    )
+    Some((if artist_match { 140 } else { 115 }, artist_match))
+}
+
+/// Splits a credit such as `A feat. B` or `A, B` into its artists.
+fn split_artists(value: &str) -> Vec<MatchKey> {
+    value
+        .to_lowercase()
+        .replace(" featuring ", "&")
+        .replace(" feat. ", "&")
+        .replace(" feat ", "&")
+        .replace(" ft. ", "&")
+        .replace(" ft ", "&")
+        .split(['&', '/', '、', ';', '；', ',', '，'])
+        .map(MatchKey::new)
+        .filter(|key| !key.compact.is_empty())
+        .collect()
 }
 
 fn lrc_metadata_value<'a>(line: &'a str, tag: &str) -> Option<&'a str> {
@@ -565,11 +628,16 @@ fn simplify_chinese(text: &str) -> String {
 fn parse_lyrics(lrc: &str, tlrc: &str) -> Vec<LyricLine> {
     let mut map: BTreeMap<u64, LyricLine> = BTreeMap::new();
 
-    let mut process_content = |content: &str, keep_empty: bool| {
+    let mut process_content = |content: &str, is_translation: bool| {
+        let merge = if is_translation {
+            merge_translation_line
+        } else {
+            merge_lyric_line
+        };
         let mut standard_lrc = String::with_capacity(content.len());
         for source_line in content.lines() {
             if let Some(line) = parse_word_synced_line(source_line) {
-                merge_lyric_line(&mut map, line);
+                merge(&mut map, line);
             } else {
                 standard_lrc.push_str(source_line);
                 standard_lrc.push('\n');
@@ -582,14 +650,14 @@ fn parse_lyrics(lrc: &str, tlrc: &str) -> Vec<LyricLine> {
         };
         for (timestamp, text) in lyrics.get_timed_lines() {
             let text = text.trim();
-            if text.is_empty() && !keep_empty {
+            if text.is_empty() && is_translation {
                 continue;
             }
             let timestamp = timestamp.get_timestamp();
             if timestamp < 0 {
                 continue;
             }
-            merge_lyric_line(
+            merge(
                 &mut map,
                 LyricLine {
                     time_ms: timestamp as u64,
@@ -601,10 +669,37 @@ fn parse_lyrics(lrc: &str, tlrc: &str) -> Vec<LyricLine> {
         }
     };
 
-    process_content(lrc, true);
-    process_content(tlrc, false);
+    process_content(lrc, false);
+    process_content(tlrc, true);
 
     map.into_values().collect()
+}
+
+/// Covers rounding between timestamp precisions, and stays well below the gap between two lines
+/// so that a translation whose original is missing is dropped instead of landing on a neighbour.
+const TRANSLATION_MATCH_WINDOW_MS: u64 = 100;
+
+/// Attaches a provider translation to the closest original line that has text.
+///
+/// A translation never becomes a line of its own, so an original that failed to parse cannot be
+/// replaced by its translation.
+fn merge_translation_line(map: &mut BTreeMap<u64, LyricLine>, line: LyricLine) {
+    if line.text.is_empty() {
+        return;
+    }
+    let window = line.time_ms.saturating_sub(TRANSLATION_MATCH_WINDOW_MS)
+        ..=line.time_ms.saturating_add(TRANSLATION_MATCH_WINDOW_MS);
+    if let Some((_, current)) = map
+        .range_mut(window)
+        .filter(|(_, current)| {
+            !current.text.is_empty()
+                && current.text != line.text
+                && current.secondary_text.is_none()
+        })
+        .min_by_key(|(time, _)| time.abs_diff(line.time_ms))
+    {
+        current.secondary_text = Some(line.text);
+    }
 }
 
 fn merge_lyric_line(map: &mut BTreeMap<u64, LyricLine>, line: LyricLine) {
@@ -676,7 +771,9 @@ fn parse_word_synced_line(line: &str) -> Option<LyricLine> {
 
 fn parse_lrc_timestamp(timestamp: &str) -> Option<u64> {
     let (minutes, second_part) = timestamp.split_once(':')?;
-    let (seconds, fraction) = second_part.split_once('.').unwrap_or((second_part, ""));
+    let (seconds, fraction) = second_part
+        .split_once(['.', ':'])
+        .unwrap_or((second_part, ""));
     if minutes.is_empty()
         || seconds.is_empty()
         || seconds.len() > 2
@@ -729,7 +826,14 @@ fn normalize_lrc_timestamps(content: &str) -> String {
         while index < bytes.len() && bytes[index].is_ascii_digit() {
             index += 1;
         }
-        if index == seconds_start || bytes.get(index) != Some(&b'.') {
+        // Some providers write `[mm:ss:xx]`; without rewriting, every such line is dropped.
+        let separator_index = index;
+        let colon_separated = match bytes.get(index) {
+            Some(b'.') => false,
+            Some(b':') => true,
+            _ => continue,
+        };
+        if index == seconds_start {
             continue;
         }
         index += 1;
@@ -737,13 +841,17 @@ fn normalize_lrc_timestamps(content: &str) -> String {
         while index < bytes.len() && bytes[index].is_ascii_digit() {
             index += 1;
         }
-        if index - fraction_start <= 2 || !matches!(bytes.get(index), Some(b']') | Some(b'>')) {
+        let fraction_len = index - fraction_start;
+        if fraction_len == 0
+            || (!colon_separated && fraction_len <= 2)
+            || !matches!(bytes.get(index), Some(b']') | Some(b'>'))
+        {
             continue;
         }
 
-        output.push_str(&content[copied_until..fraction_start]);
-        output.push(char::from(bytes[fraction_start]));
-        output.push(char::from(bytes[fraction_start + 1]));
+        output.push_str(&content[copied_until..separator_index]);
+        output.push('.');
+        output.push_str(&content[fraction_start..fraction_start + fraction_len.min(2)]);
         copied_until = index;
     }
 

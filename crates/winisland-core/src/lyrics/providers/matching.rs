@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 
 use serde_json::Value;
 
-use crate::lyrics::{MatchKey, normalize_match_text, simplify_chinese};
+use crate::lyrics::{MatchKey, normalize_match_text, simplify_chinese, split_artists};
 
 pub(super) struct SongQuery {
     raw_title: String,
@@ -142,17 +142,9 @@ pub(super) fn artist_matches(expected: &str, candidate: &str) -> bool {
         return true;
     }
     let components = |value: &str| {
-        value
-            .to_lowercase()
-            .replace(" featuring ", "&")
-            .replace(" feat. ", "&")
-            .replace(" feat ", "&")
-            .replace(" ft. ", "&")
-            .replace(" ft ", "&")
-            .split(['&', '/', '、', ';', '；', ',', '，'])
-            .map(MatchKey::new)
+        split_artists(value)
+            .into_iter()
             .map(|key| key.compact)
-            .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()
     };
     let expected_parts = components(expected);

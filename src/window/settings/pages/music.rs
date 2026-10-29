@@ -51,6 +51,10 @@ impl SettingsApp {
             page.section(tr("section_lyrics"));
             page.group_start();
             page.setting(&self.config, AppConfigField::LyricsMode, true);
+            page.setting(&self.config, AppConfigField::ShowLyrics, true);
+            if show_lyrics {
+                page.setting(&self.config, AppConfigField::ShowSecondaryLyrics, true);
+            }
             if self.config.lyrics_mode == "lrc" {
                 page.row_folder(
                     tr("lyrics_local_dir"),
@@ -67,17 +71,12 @@ impl SettingsApp {
                     true,
                     MusicAction::LyricsFolder,
                 );
-                page.setting(&self.config, AppConfigField::ShowSecondaryLyrics, true);
-            } else {
-                page.setting(&self.config, AppConfigField::ShowLyrics, true);
-                if show_lyrics {
-                    page.setting(&self.config, AppConfigField::ShowSecondaryLyrics, true);
-                    page.setting(&self.config, AppConfigField::LyricsSource, true);
-                    page.setting(&self.config, AppConfigField::LyricsDelay, true);
-                    page.setting(&self.config, AppConfigField::LyricsScroll, true);
-                    if self.config.lyrics_scroll {
-                        page.setting(&self.config, AppConfigField::LyricsScrollMaxWidth, true);
-                    }
+            } else if show_lyrics {
+                page.setting(&self.config, AppConfigField::LyricsSource, true);
+                page.setting(&self.config, AppConfigField::LyricsDelay, true);
+                page.setting(&self.config, AppConfigField::LyricsScroll, true);
+                if self.config.lyrics_scroll {
+                    page.setting(&self.config, AppConfigField::LyricsScrollMaxWidth, true);
                 }
             }
             if show_lyrics {
