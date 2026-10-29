@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Hotkey, LocalDateTime, LunarDate, PlatformError, TrayAction, TrayLabels, TrayTheme};
+use crate::{
+    Hotkey, HourFormat, LocalDateTime, LunarDate, PlatformError, TrayAction, TrayLabels, TrayTheme,
+};
 
 /// Shell services are synchronous. Call blocking operations away from rendering;
 /// returned guards own their resources, errors never panic, and methods are not reentrant.
@@ -17,6 +19,8 @@ pub trait ShellIntegration {
     fn locale(&self) -> String;
     /// Reads local wall time from the OS.
     fn local_datetime(&self) -> LocalDateTime;
+    /// Reads the user's 12/24-hour clock style, or 24-hour zero-padded on failure.
+    fn hour_format(&self) -> HourFormat;
     /// Converts a Gregorian date to the Chinese lunisolar calendar; `None` on failure.
     fn lunar_date(&self, year: u16, month: u16, day: u16) -> Option<LunarDate>;
     /// Converts text to simplified Chinese, or returns original text on failure.

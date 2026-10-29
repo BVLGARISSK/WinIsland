@@ -495,3 +495,19 @@ pub struct LocalDateTime {
     pub second: u16,
     pub millisecond: u16,
 }
+
+/// Hour style of the user's short-time format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HourFormat {
+    pub twelve_hour: bool,
+    pub zero_padded: bool,
+}
+
+impl Default for HourFormat {
+    fn default() -> Self {
+        Self {
+            twelve_hour: false,
+            zero_padded: true,
+        }
+    }
+}

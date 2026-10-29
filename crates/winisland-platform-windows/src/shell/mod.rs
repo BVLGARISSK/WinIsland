@@ -22,8 +22,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::HSTRING;
 use winisland_platform::{
-    Hotkey, InstanceLock, LocalDateTime, LunarDate, PlatformError, ShellIntegration, TrayAction,
-    TrayLabels, TrayTheme,
+    Hotkey, HourFormat, InstanceLock, LocalDateTime, LunarDate, PlatformError, ShellIntegration,
+    TrayAction, TrayLabels, TrayTheme,
 };
 
 pub struct WindowsShell;
@@ -67,6 +67,9 @@ impl ShellIntegration for WindowsShell {
             second: time.wSecond,
             millisecond: time.wMilliseconds,
         }
+    }
+    fn hour_format(&self) -> HourFormat {
+        locale::hour_format()
     }
     fn lunar_date(&self, year: u16, month: u16, day: u16) -> Option<LunarDate> {
         lunar::convert(year, month, day)
