@@ -232,7 +232,7 @@ fn collect_lrc_candidates(
             // carries more than the title must name the player's artist.
             if !artist.compact.is_empty()
                 && !metadata_artist_match
-                && !stem_fits_artist(&stem_key, title, artist_name, artist)
+                && !stem_fits_artist(stem, &stem_key, title, artist_name, artist)
             {
                 return None;
             }
@@ -279,45 +279,36 @@ fn joins_title_and_artist(candidate: &MatchKey, title: &MatchKey, artist: &Match
     })
 }
 
-/// Whether a filename names the player's artist, or carries nothing besides the title and a track
-/// number that could name someone else.
-///
 /// Artists are compared as whole words so that a short name such as `Lu` does not match inside
 /// `Blue`.
 fn stem_fits_artist(
+    stem_name: &str,
     stem: &MatchKey,
     title: &MatchKey,
     artist_name: &str,
     artist: &MatchKey,
 ) -> bool {
-    if stem.matches(title) || joins_title_and_artist(stem, title, artist) {
-        return true;
-    }
-    let words: Vec<&str> = stem.normalized.split_whitespace().collect();
-    let title_words: Vec<&str> = title.normalized.split_whitespace().collect();
-    if let Some(start) = find_words(&words, &title_words)
-        && words[..start]
-            .iter()
-            .chain(&words[start + title_words.len()..])
-            .all(|word| word.chars().all(|character| character.is_ascii_digit()))
+    let unnumbered = MatchKey::new(stem_name.trim_matches(|character: char| {
+        character.is_ascii_digit()
+            || character.is_whitespace()
+            || matches!(character, '.' | '-' | '_')
+    }));
+    if [stem, &unnumbered]
+        .into_iter()
+        .any(|key| key.matches(title) || joins_title_and_artist(key, title, artist))
     {
         return true;
     }
+    let words: Vec<&str> = stem.normalized.split_whitespace().collect();
     std::iter::once(artist.clone())
         .chain(split_artists(artist_name))
         .any(|component| {
             let component_words: Vec<&str> = component.normalized.split_whitespace().collect();
-            find_words(&words, &component_words).is_some()
+            !component_words.is_empty()
+                && words
+                    .windows(component_words.len())
+                    .any(|window| window == component_words)
         })
-}
-
-fn find_words(words: &[&str], needle: &[&str]) -> Option<usize> {
-    if needle.is_empty() {
-        return None;
-    }
-    words
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 fn fuzzy_title_score(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) -> Option<u16> {
@@ -404,7 +395,7 @@ fn shared_token_signal(left: &str, right: &str) -> (usize, usize) {
     (shared_tokens, shared_chars)
 }
 
-/// Scores the `[ti:]` and `[ar:]` tags, and reports whether `[ar:]` names the player's artist.
+/// The flag is whether `[ar:]` names the player's artist; callers must not infer it from the score.
 fn score_lrc_metadata(content: &str, title: &MatchKey, artist: &MatchKey) -> Option<(u16, bool)> {
     let mut metadata_title = None;
     let mut metadata_artist = None;
@@ -435,7 +426,6 @@ fn score_lrc_metadata(content: &str, title: &MatchKey, artist: &MatchKey) -> Opt
     Some((if artist_match { 140 } else { 115 }, artist_match))
 }
 
-/// Splits a credit such as `A feat. B` or `A, B` into its artists.
 fn split_artists(value: &str) -> Vec<MatchKey> {
     value
         .to_lowercase()
@@ -675,12 +665,10 @@ fn parse_lyrics(lrc: &str, tlrc: &str) -> Vec<LyricLine> {
     map.into_values().collect()
 }
 
-/// Covers rounding between timestamp precisions, and stays well below the gap between two lines
-/// so that a translation whose original is missing is dropped instead of landing on a neighbour.
+/// Covers rounding between timestamp precisions while keeping a translation whose original is
+/// missing from usually landing on a neighbouring line.
 const TRANSLATION_MATCH_WINDOW_MS: u64 = 100;
 
-/// Attaches a provider translation to the closest original line that has text.
-///
 /// A translation never becomes a line of its own, so an original that failed to parse cannot be
 /// replaced by its translation.
 fn merge_translation_line(map: &mut BTreeMap<u64, LyricLine>, line: LyricLine) {
