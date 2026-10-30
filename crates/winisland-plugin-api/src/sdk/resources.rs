@@ -176,10 +176,19 @@ unsafe extern "C" fn transform_line(
     if callback_data.is_null() || input.is_null() || out_len.is_null() {
         return PluginStatus::InvalidArgument;
     }
-    // SAFETY: The host owns this callback invocation and keeps the input alive for its duration.
-    let input = unsafe { &*input };
+    // SAFETY: Every host supplies at least `struct_size`, and no reference to the whole struct is
+    // formed.
+    let size = unsafe { (&raw const (*input).struct_size).read() };
+    // Hosts that predate the song fields pass only the prefix ending at `text`, so neither the
+    // later fields nor a reference to the full struct may be used.
+    if (size as usize) < std::mem::offset_of!(LyricsTextV2, text) + std::mem::size_of::<Utf8Slice>()
+    {
+        return PluginStatus::UnsupportedVersion;
+    }
+    // SAFETY: The checked size covers `text`, which is read through the raw pointer.
+    let text = unsafe { (&raw const (*input).text).read() };
     // SAFETY: The host keeps the borrowed text valid for this callback.
-    let Some(text) = (unsafe { borrowed_text(input.text) }) else {
+    let Some(text) = (unsafe { borrowed_text(text) }) else {
         return PluginStatus::InvalidArgument;
     };
     // SAFETY: The callback pointer is the stable inner Box retained by Resource.
@@ -205,7 +214,7 @@ unsafe extern "C" fn transform_secondary(
     }
     // SAFETY: The host keeps the input prefix alive for this callback.
     let size = unsafe { (*input).struct_size };
-    if size < std::mem::size_of::<LyricsTextV2>() as u32 {
+    if (size as usize) < std::mem::size_of::<LyricsTextV2>() {
         return PluginStatus::UnsupportedVersion;
     }
     // SAFETY: The checked size covers every field read below.

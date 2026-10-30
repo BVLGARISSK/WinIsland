@@ -17,9 +17,7 @@ const PRIMARY_TIMEOUT: Duration = Duration::from_secs(2);
 /// Secondary transformers run after the original lyrics are shown, and one may process the whole
 /// song on its first line, so it gets far longer than a primary transformer.
 const SECONDARY_TIMEOUT: Duration = Duration::from_secs(180);
-/// How often a waiting request checks whether its annotation was cancelled.
 const CANCEL_POLL: Duration = Duration::from_millis(100);
-/// How often partly annotated lyrics are shown while secondary transformers run.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
@@ -34,12 +32,15 @@ struct LyricsWorker {
     token: PluginToken,
     sender: Sender<WorkerEvent>,
     thread: std::thread::Thread,
-    /// Requests the plugin worker has not handled yet, including ones the bridge stopped waiting
-    /// for.
-    pending: Arc<AtomicUsize>,
-    /// Set when a call outlived its timeout, so later songs skip the plugin instead of waiting
-    /// for it again; cleared once the plugin has no pending request.
-    stalled: Arc<AtomicBool>,
+    load: Arc<WorkerLoad>,
+}
+
+/// Tracked apart from any waiting request: a waiter gives up when its song changes, so only the
+/// age of the plugin's running call shows that the plugin has hung.
+#[derive(Default)]
+struct WorkerLoad {
+    pending: AtomicUsize,
+    running_since: Mutex<Option<Instant>>,
 }
 
 pub(super) struct TransformRequest {
@@ -50,33 +51,59 @@ pub(super) struct TransformRequest {
     pub(super) index: u32,
     pub(super) count: u32,
     pub(super) song: Arc<str>,
-    /// Set once the lyrics this request belongs to are stale, so a queued request is skipped
-    /// instead of calling the plugin.
     pub(super) cancelled: Arc<AtomicBool>,
-    _pending: PendingRequest,
+    pending: PendingRequest,
 }
 
-/// Counts a request as pending until the plugin worker has handled or dropped it.
+impl TransformRequest {
+    pub(super) fn start_call(&self) -> RunningCall {
+        if let Ok(mut running_since) = self.pending.load.running_since.lock() {
+            *running_since = Some(Instant::now());
+        }
+        RunningCall(self.pending.load.clone())
+    }
+}
+
+/// Dropping a request, whether handled or discarded by a stopping worker, ends its pending state.
 struct PendingRequest {
-    pending: Arc<AtomicUsize>,
-    stalled: Arc<AtomicBool>,
+    load: Arc<WorkerLoad>,
 }
 
 impl Drop for PendingRequest {
     fn drop(&mut self) {
-        if self.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.stalled.store(false, Ordering::Release);
+        self.load.pending.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(super) struct RunningCall(Arc<WorkerLoad>);
+
+impl Drop for RunningCall {
+    fn drop(&mut self) {
+        if let Ok(mut running_since) = self.0.running_since.lock() {
+            *running_since = None;
         }
     }
 }
 
 impl LyricsWorker {
     fn pending_request(&self) -> PendingRequest {
-        self.pending.fetch_add(1, Ordering::AcqRel);
+        self.load.pending.fetch_add(1, Ordering::AcqRel);
         PendingRequest {
-            pending: self.pending.clone(),
-            stalled: self.stalled.clone(),
+            load: self.load.clone(),
         }
+    }
+
+    fn busy(&self) -> bool {
+        self.load.pending.load(Ordering::Acquire) > 0
+    }
+
+    fn stalled(&self) -> bool {
+        self.load
+            .running_since
+            .lock()
+            .ok()
+            .and_then(|running_since| *running_since)
+            .is_some_and(|start| start.elapsed() >= SECONDARY_TIMEOUT)
     }
 
     fn transform(
@@ -106,11 +133,6 @@ impl LyricsWorker {
                     return Err(PluginStatus::StaleHandle);
                 }
                 Err(RecvTimeoutError::Timeout) if Instant::now() >= deadline => {
-                    self.stalled.store(true, Ordering::Release);
-                    // The call may have returned between the timeout and the store above.
-                    if self.pending.load(Ordering::Acquire) == 0 {
-                        self.stalled.store(false, Ordering::Release);
-                    }
                     return Err(PluginStatus::Internal);
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -137,8 +159,7 @@ impl LyricsBridge {
                 token: instance.token(),
                 sender: sender.clone(),
                 thread: thread.thread().clone(),
-                pending: Arc::default(),
-                stalled: Arc::default(),
+                load: Arc::default(),
             });
         }
     }
@@ -149,13 +170,10 @@ impl LyricsBridge {
         }
     }
 
-    /// Lists the plugins with a transformer of the requested kind. A plugin's calls run one at a
-    /// time on its worker, so sending it a request it has no transformer for would wait behind
-    /// its other work, such as a long secondary call, and then time out.
-    ///
-    /// A stalled plugin is left out. A busy plugin is left out of primary runs, which must not
-    /// hold back the lyrics; a secondary run queues behind it, because the earlier call is
-    /// usually the previous song's, whose remaining requests the plugin skips.
+    /// A plugin's calls run one at a time on its worker, so a request it has no transformer for
+    /// would wait behind its other work and time out. Primary runs also skip a busy plugin so
+    /// they never hold back the lyrics; secondary runs queue behind it, because the earlier call
+    /// is usually the previous song's, whose remaining requests the plugin skips.
     fn active_workers(&self, secondary: bool) -> Vec<(LyricsWorker, bool)> {
         let Ok(kinds) = self.kinds.lock() else {
             return Vec::new();
@@ -169,8 +187,8 @@ impl LyricsBridge {
                         kinds
                             .values()
                             .any(|&(token, kind)| token == worker.token && kind == secondary)
-                            && !worker.stalled.load(Ordering::Acquire)
-                            && (secondary || worker.pending.load(Ordering::Acquire) == 0)
+                            && !worker.stalled()
+                            && (secondary || !worker.busy())
                     })
                     .cloned()
                     .map(|worker| (worker, true))
@@ -179,22 +197,17 @@ impl LyricsBridge {
             .unwrap_or_default()
     }
 
-    /// Whether a plugin that can answer now has a transformer that writes secondary text.
+    /// Whether a plugin that is not stalled has a transformer that writes secondary text.
     pub fn has_secondary(&self) -> bool {
         !self.active_workers(true).is_empty()
     }
 
-    /// Runs the transformers that replace line text.
     pub fn apply(&self, lyrics: Arc<Vec<LyricLine>>) -> Arc<Vec<LyricLine>> {
         self.run(lyrics, false, &Arc::default(), |_| {})
     }
 
-    /// Runs the transformers that write each line's secondary text, such as a translation.
-    ///
-    /// `progress` receives the partly annotated lyrics at most once per [`PROGRESS_INTERVAL`] so
-    /// that a plugin answering line by line shows its text as it goes. Stops early once
-    /// `cancelled` is set; the partly annotated lyrics are then stale and should be discarded by
-    /// the caller.
+    /// `progress` receives partial results at most once per [`PROGRESS_INTERVAL`]. Once
+    /// `cancelled` is set the run stops and its result is stale.
     pub fn annotate(
         &self,
         lyrics: Arc<Vec<LyricLine>>,
@@ -250,7 +263,7 @@ impl LyricsBridge {
                     count,
                     song: song.clone(),
                     cancelled: cancelled.clone(),
-                    _pending: worker.pending_request(),
+                    pending: worker.pending_request(),
                 };
                 match worker.transform(request, timeout) {
                     Ok(text) if secondary => {
@@ -274,10 +287,10 @@ impl LyricsBridge {
                     Err(status) => {
                         *active = false;
                         if reported.insert(worker.id.clone()) {
-                            if worker.stalled.load(Ordering::Acquire) {
+                            if worker.stalled() {
                                 log::warn!(
-                                    "Lyrics transformer '{}' did not answer within {timeout:?}; \
-                                     skipping it until that call returns",
+                                    "Lyrics transformer '{}' has run one call for over \
+                                     {SECONDARY_TIMEOUT:?}; skipping it until that call returns",
                                     worker.id
                                 );
                             } else {
@@ -306,6 +319,7 @@ pub(super) fn dispatch_transform(
     if request.cancelled.load(Ordering::Relaxed) {
         return Err(PluginStatus::StaleHandle);
     }
+    let _call = request.start_call();
     let mut ids = runtime.resources.list(token, ResourceKind::Lyrics)?;
     ids.sort_unstable();
     let mut text = request.text.clone();

@@ -24,8 +24,7 @@ use crate::runtime::HostRuntime;
 mod lyrics;
 pub use lyrics::LyricsBridge;
 
-/// How long shutdown waits for the plugin worker's current call, matching the limit the host
-/// gives other plugin calls.
+/// Matches the limit the host gives other plugin calls.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 
 enum WorkerEvent {
