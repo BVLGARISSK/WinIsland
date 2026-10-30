@@ -279,6 +279,26 @@ fn joins_title_and_artist(candidate: &MatchKey, title: &MatchKey, artist: &Match
     })
 }
 
+/// A track number counts only as a whole number set off by a separator, so digits that belong to
+/// the title, as in `Summer of 69`, stay.
+fn strip_track_number(name: &str, from_end: bool) -> &str {
+    let separator =
+        |character: char| character.is_whitespace() || matches!(character, '.' | '-' | '_');
+    let digit = |character: char| character.is_ascii_digit();
+    if from_end {
+        let rest = name.trim_end_matches(digit);
+        if rest.len() < name.len() && rest.ends_with(separator) {
+            return rest.trim_end_matches(separator);
+        }
+    } else {
+        let rest = name.trim_start_matches(digit);
+        if rest.len() < name.len() && rest.starts_with(separator) {
+            return rest.trim_start_matches(separator);
+        }
+    }
+    name
+}
+
 /// Artists are compared as whole words so that a short name such as `Lu` does not match inside
 /// `Blue`.
 fn stem_fits_artist(
@@ -288,14 +308,16 @@ fn stem_fits_artist(
     artist_name: &str,
     artist: &MatchKey,
 ) -> bool {
-    let unnumbered = MatchKey::new(stem_name.trim_matches(|character: char| {
-        character.is_ascii_digit()
-            || character.is_whitespace()
-            || matches!(character, '.' | '-' | '_')
-    }));
-    if [stem, &unnumbered]
-        .into_iter()
-        .any(|key| key.matches(title) || joins_title_and_artist(key, title, artist))
+    let leading = strip_track_number(stem_name, false);
+    if [
+        leading,
+        strip_track_number(stem_name, true),
+        strip_track_number(leading, true),
+    ]
+    .into_iter()
+    .map(MatchKey::new)
+    .chain(std::iter::once(stem.clone()))
+    .any(|key| key.matches(title) || joins_title_and_artist(&key, title, artist))
     {
         return true;
     }
